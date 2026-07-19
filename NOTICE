@@ -1,0 +1,54 @@
+openevidence-tools
+Copyright (c) 2026 drpwchen
+
+This product includes work derived from third-party open-source projects.
+
+--------------------------------------------------------------------------
+1. audit-oe-skill — https://github.com/htlin222/audit-oe-skill
+--------------------------------------------------------------------------
+
+`skills/oe-verify/SKILL.md` is derived from `audit-oe-skill` by Hsieh-Ting Lin.
+Specifically, the following originate there and are reproduced or adapted here:
+
+  - the `origin` ROT-1 decode
+  - the corpus -> risk tier rules (HIGH / MEDIUM / LOW) and the corpus name list
+  - the "transitive citation" failure-mode framing and its trace-back stage
+  - the verification architecture: N parallel per-citation agents plus a single
+    stronger cross-citation contradiction agent
+  - the contradiction severity ladder (CRITICAL / WARNING / NOTE, >20% threshold)
+
+Its licence follows in full.
+
+    MIT License
+
+    Copyright (c) 2026 Hsieh-Ting Lin
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+--------------------------------------------------------------------------
+2. openevidence-mcp — https://github.com/htlin222/openevidence-mcp
+--------------------------------------------------------------------------
+
+The browser-relay transport concept used by `mcp/server.py` — running OpenEvidence
+API calls inside the user's own already-logged-in browser tab rather than scraping
+the site — originates with `openevidence-mcp` by Hsieh-Ting Lin (Apache-2.0).
+
+No code from that project is reproduced here: it is TypeScript, this is Python, and
+the transports are independently implemented. The idea, however, is his, and this
+project follows from it.

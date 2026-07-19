@@ -134,16 +134,40 @@ running; the server will open/reuse an OpenEvidence tab as needed.
 
 ---
 
-## Relationship to upstream
+## Credit where it's due — htlin222
 
-This is **not a fork** of [htlin222/openevidence-mcp](https://github.com/htlin222/openevidence-mcp).
-It has its own tool layer, because the verifier depends on fields upstream doesn't expose —
-`publication_types`, `impact_score`, `recency_score`, `is_guideline`, and the per-chunk `origin`
-provenance.
+This project started independently: I wanted OpenEvidence answers to flow into my note-writing
+workflow, and the first version drove the site with my own browser automation. That version died
+to bot detection, and it was while looking for a way forward that I found
+**[Hsieh-Ting Lin (htlin222)](https://github.com/htlin222)**'s work. Much of what this repo does
+well now comes from his more recent updates, and it is worth being specific about what came from
+where.
 
-With thanks to **[htlin222](https://github.com/htlin222)** for two ideas this project builds on:
-the browser-relay transport concept, and the `origin` ROT-1 decode technique
-(from `audit-oe-skill`), which is what makes the provenance-tiered verification possible.
+From **[audit-oe-skill](https://github.com/htlin222/audit-oe-skill)** (MIT) came the core insight
+this whole repo is built around: that OpenEvidence's `origin` field is ROT-1 obfuscated, that it
+names the RAG corpus a chunk was retrieved from, and that the corpus therefore *predicts* how
+likely the citation is to be mis-attributed. He also named the failure mode — **transitive
+citation**, where a review quotes another trial's number and OE credits the review — and built
+the verification architecture we adopted: one cheap agent per citation in parallel, a trace-back
+stage for quantitative claims in review full text, and a single stronger agent scanning the cited
+papers for contradictions with each other, graded CRITICAL / WARNING / NOTE. Our `origin_risk`
+tiers are his risk table; our Layer 1 and Layer 3 are his Phase 3 and Phase 4. When you read our
+verification report, most of the questions it asks are his questions.
+
+From **[openevidence-mcp](https://github.com/htlin222/openevidence-mcp)** (Apache-2.0) came the
+transport idea that got us unstuck: OpenEvidence has no public API and an httpOnly session cookie,
+so don't scrape it — run the call inside the clinician's own already-logged-in browser tab. Our
+implementation is our own (and drives a different daemon), but the direction was his.
+
+We wrote our own tool layer rather than forking, for a practical reason: our verifier needs
+`publication_types`, `impact_score`, `recency_score`, `is_guideline` and per-chunk `origin`
+returned through the MCP contract itself, and we drive a general-purpose browser daemon rather
+than a dedicated extension. We also added a completeness layer his skill doesn't have (what did
+OE *omit*?), a CrossRef existence gate, and a marker↔citation index mapping our architecture
+needs and his does not. Those are additions to his foundation, not a replacement for it.
+
+`skills/oe-verify/` is derived from `audit-oe-skill`, MIT © 2026 Hsieh-Ting Lin; see
+[NOTICE](NOTICE). Thank you, Hsieh-Ting.
 
 ## Works with textbook-to-note
 

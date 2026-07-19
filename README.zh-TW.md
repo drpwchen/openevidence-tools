@@ -119,15 +119,34 @@ claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
 
 ---
 
-## 與上游專案的關係
+## 該給的致謝 — htlin222
 
-本專案**不是** [htlin222/openevidence-mcp](https://github.com/htlin222/openevidence-mcp) 的 fork。
-它有自己的 tool layer，因為查核流程依賴上游沒有暴露的欄位 —— `publication_types`、`impact_score`、
-`recency_score`、`is_guideline`，以及每個片段的 `origin` provenance。
+這個專案一開始是獨立長出來的：我想把 OpenEvidence 的答案接進自己的筆記流程，第一版是用自己寫的
+瀏覽器自動化去操作網站。那一版被 bot detection 擋死，我在找出路的過程中才看到
+**[Hsieh-Ting Lin (htlin222)](https://github.com/htlin222)** 的作品。這個 repo 現在做得好的地方，
+很多來自他近期的更新，值得把來源講清楚。
 
-在此感謝 **[htlin222](https://github.com/htlin222)** 的兩個想法，本專案在其基礎上發展：browser-relay
-傳輸的概念，以及 `origin` ROT-1 解碼的技巧（出自 `audit-oe-skill`）—— 後者正是 provenance 分級查核
-得以成立的關鍵。
+**[audit-oe-skill](https://github.com/htlin222/audit-oe-skill)**（MIT）貢獻了整個 repo 的核心洞見：
+OpenEvidence 的 `origin` 欄位是 ROT-1 混淆過的、它標示這段 chunk 是從哪個 RAG corpus 取出來的，
+而 corpus 本身就能**預測**這條 citation 被錯置的機率。transitive citation（綜述引用了別人的數字、
+OE 卻把功勞算給綜述）這個 failure mode 是他命名的；我們採用的驗證架構也是他的：每條 citation 一個
+平行的便宜 agent、對綜述全文中的量化宣稱做溯源、再用一個較強的 agent 檢查 OE 自己引的文獻彼此是否
+矛盾，並分成 CRITICAL / WARNING / NOTE 三級。我們的 `origin_risk` 分層就是他的 risk table；我們的
+Layer 1 與 Layer 3 就是他的 Phase 3 與 Phase 4。讀我們的驗證報告時，裡面大多數的提問，其實是他的提問。
+
+**[openevidence-mcp](https://github.com/htlin222/openevidence-mcp)**（Apache-2.0）貢獻了 transport
+的想法，讓我們脫困：OpenEvidence 沒有公開 API、session cookie 又是 httpOnly，所以不要去爬它 ——
+直接讓請求跑在臨床醫師自己那個已登入的瀏覽器分頁裡。實作是我們自己寫的（驅動的 daemon 也不同），
+但方向是他指的。
+
+我們自己寫了一層 tool layer 而不是 fork，理由很實際：verifier 需要 `publication_types`、
+`impact_score`、`recency_score`、`is_guideline` 與 per-chunk `origin` 直接從 MCP contract 回傳，
+而且我們驅動的是通用型 browser daemon，不是專屬 extension。我們另外加了他的 skill 沒有的
+completeness layer（OE **漏掉**了什麼？）、CrossRef 存在性 gate，以及我們這種架構才需要的
+marker↔citation index 對應。這些是加在他的地基上，不是取代它。
+
+`skills/oe-verify/` 衍生自 `audit-oe-skill`，MIT © 2026 Hsieh-Ting Lin，詳見 [NOTICE](NOTICE)。
+謝謝你，Hsieh-Ting。
 
 ## 與 textbook-to-note 搭配
 

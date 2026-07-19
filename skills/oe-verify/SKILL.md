@@ -15,6 +15,12 @@ triggers:
 
 # /oe-verify — OpenEvidence Citation Verification
 
+> Derived from [audit-oe-skill](https://github.com/htlin222/audit-oe-skill),
+> MIT © 2026 Hsieh-Ting Lin. The `origin` ROT-1 decode, the corpus→risk tiers, the
+> transitive-citation framing and trace-back stage, the parallel-per-citation +
+> single-cross-citation agent architecture, and the CRITICAL/WARNING/NOTE severity
+> ladder all originate there. See [NOTICE](../../NOTICE) for the full licence text.
+
 ## Why This Skill Exists
 
 OpenEvidence uses RAG (vector search + LLM synthesis) to answer clinical questions.
