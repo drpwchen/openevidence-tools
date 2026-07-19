@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local runtime data / logs
+*.log
+last_run.log
+.openevidence/
+queries.jsonl
+rate_log.jsonl
+
+# Secrets / environment
+.env
+.env.*
+*.secret
+.secrets/
+
+# OS
+.DS_Store
+Thumbs.db
