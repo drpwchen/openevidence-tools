@@ -101,6 +101,7 @@ unverifiable) and an evidence-landscape summary.
 |---|---|---|
 | `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | Browser-bridge daemon endpoint. |
 | `OE_BRIDGE_BIN` | `~/.kimi-webbridge/bin/kimi-webbridge.exe` | Daemon binary to auto-start if it isn't running. |
+| `OE_BROWSER_EXE` | auto-detected (Edge/Chrome) | Browser to auto-launch when the bridge extension isn't connected (i.e. the browser is closed). |
 | `OE_DATA_DIR` | `~/.openevidence` | Where the query log and rate log are written. |
 
 ### Install
@@ -114,8 +115,9 @@ claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
 # Put skills/oe-verify/ where your client discovers skills.
 ```
 
-Log into openevidence.com in your normal browser and make sure your browser-bridge daemon is
-running; the server will open/reuse an OpenEvidence tab as needed.
+Log into openevidence.com in your normal browser once. From then on the server is
+self-healing: it auto-starts the bridge daemon, auto-launches the browser if it is closed
+(the bridge extension must be installed in it), and opens/reuses an OpenEvidence tab as needed.
 
 ---
 

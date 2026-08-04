@@ -88,6 +88,7 @@ OE 檢索到某篇 **review 全文**的一個片段，而那段話其實是該 r
 |---|---|---|
 | `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | browser-bridge daemon 的 endpoint。 |
 | `OE_BRIDGE_BIN` | `~/.kimi-webbridge/bin/kimi-webbridge.exe` | daemon 未啟動時要自動拉起的執行檔。 |
+| `OE_BROWSER_EXE` | 自動偵測（Edge/Chrome） | bridge extension 未連線（＝瀏覽器沒開）時要自動啟動的瀏覽器。 |
 | `OE_DATA_DIR` | `~/.openevidence` | query log 與 rate log 的寫入位置。 |
 
 ### 安裝
@@ -101,8 +102,8 @@ claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
 # 把 skills/oe-verify/ 放到你的 client 會掃描 skill 的位置。
 ```
 
-在平常用的瀏覽器登入 openevidence.com，並確認 browser-bridge daemon 有在跑；server 會自動開啟或
-重用一個 OpenEvidence 分頁。
+在平常用的瀏覽器登入 openevidence.com 一次即可。之後 server 會自我修復：daemon 沒跑會自動拉起、
+瀏覽器沒開會自動啟動（該瀏覽器要裝好 bridge extension），並自動開啟或重用一個 OpenEvidence 分頁。
 
 ---
 

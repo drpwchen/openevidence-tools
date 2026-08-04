@@ -51,6 +51,20 @@ KIMI_BIN = Path(
 CHUNK = 40_000          # verified intact end-to-end; keeps each evaluate response small
 POLL_INTERVAL_SEC = 2.0
 
+# Browser auto-launch: the bridge daemon is only a relay — the extension living
+# inside the browser does the actual work, so a closed browser means every
+# command fails even though the daemon answers. Set OE_BROWSER_EXE to the browser
+# that has the bridge extension installed; otherwise common paths are tried.
+_BROWSER_CANDIDATES = [
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+]
+BROWSER_EXE = os.environ.get("OE_BROWSER_EXE") or next(
+    (p for p in _BROWSER_CANDIDATES if Path(p).exists()), None
+)
+
 
 def _kimi_cmd(action: str, args: dict, timeout: int = 30) -> dict:
     """One browser-bridge command. Returns the `data` payload."""
@@ -110,6 +124,46 @@ def _ensure_kimi_daemon() -> None:
     )
 
 
+def _bridge_status() -> dict:
+    """GET the daemon's /status JSON; {} when unreachable/unparseable."""
+    status_url = KIMI_URL.rsplit("/", 1)[0] + "/status"
+    try:
+        with urllib.request.urlopen(status_url, timeout=5) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def _ensure_browser() -> None:
+    """Launch the browser if the bridge extension isn't connected.
+
+    /status.extension_connected is the authoritative signal for "a browser with
+    the bridge extension is up". No-ops when already connected.
+    """
+    if _bridge_status().get("extension_connected"):
+        return
+    if not BROWSER_EXE or not Path(BROWSER_EXE).exists():
+        raise RuntimeError(
+            "bridge extension not connected and no browser found to launch — "
+            "open the browser with the bridge extension manually, or set OE_BROWSER_EXE"
+        )
+    subprocess.Popen(
+        [str(BROWSER_EXE)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
+    for _ in range(30):  # browser cold start + extension websocket handshake
+        time.sleep(2.0)
+        if _bridge_status().get("extension_connected"):
+            return
+    raise RuntimeError(
+        "browser was started but the bridge extension did not connect within 60s — "
+        "check the extension is installed/enabled in this browser profile"
+    )
+
+
 def _ensure_oe_tab() -> None:
     """Make an openevidence.com tab the session's current tab, opening one if needed.
 
@@ -117,6 +171,7 @@ def _ensure_oe_tab() -> None:
     logged-in session, so a wrong-origin tab silently yields an anonymous request.
     """
     _ensure_kimi_daemon()
+    _ensure_browser()
     try:
         r = _kimi_cmd("find_tab", {"url": BASE_URL}, timeout=15)
         if r.get("success"):
