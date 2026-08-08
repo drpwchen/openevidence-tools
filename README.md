@@ -88,20 +88,32 @@ unverifiable) and an evidence-landscape summary.
   OpenEvidence API call as a page-context `fetch()` **inside your own already-logged-in
   openevidence.com browser tab**, driven through a small local daemon that listens on
   `127.0.0.1`. Every request therefore uses *your own account and session* — exactly what would
-  happen if you clicked in the tab yourself. The reference implementation targets a daemon
-  called `kimi-webbridge` (default endpoint `http://127.0.0.1:10086/command`);
-  point `OE_BRIDGE_URL` at any daemon that speaks the same simple `{action, args, session}`
-  JSON contract. OpenEvidence has no public API and its session cookie is httpOnly, which is why
-  an in-tab fetch (rather than a plain HTTP client) is used at all.
-- **Python 3.10+** and the deps in `requirements.txt` (`mcp`).
+  happen if you clicked in the tab yourself. The reference implementation targets
+  **[Kimi WebBridge](https://www.kimi.com/features/webbridge)**, the browser bridge built into
+  Moonshot's Kimi desktop app (default endpoint `http://127.0.0.1:10086/command`) — note there
+  are unrelated third-party projects using the name `kimi-webbridge`, some of which expose an
+  *unauthenticated* port 10086; this repo means the official one. Point `OE_BRIDGE_URL` at any
+  daemon that speaks the same simple `{action, args, session}` JSON contract. OpenEvidence has no
+  public API and its session cookie is httpOnly, which is why an in-tab fetch (rather than a
+  plain HTTP client) is used at all.
+- **Python 3.10+** and the deps in `requirements.txt` (`mcp`, pinned `<2` — see below).
+- **Windows, macOS or Linux.** One caveat off Windows: the daemon has no documented standalone
+  binary there (the Kimi desktop app *is* the daemon), so **start the bridge yourself before
+  using the server** — auto-start only works on Windows, or wherever you point `OE_BRIDGE_BIN`
+  at a binary that accepts a `start` argument. Browser auto-launch works on all three.
+
+> **`mcp` must stay below 2.0.** mcp 2.0 removed `mcp.server.fastmcp`, so an unpinned install
+> resolves to 2.x and `server.py` dies at import with `ModuleNotFoundError` — which an MCP client
+> only ever surfaces as `Failed to connect — Connection closed`, sending you hunting in the wrong
+> place. `requirements.txt` pins it; if you install by hand, pin it too.
 
 ### Configuration (environment variables)
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | Browser-bridge daemon endpoint. |
-| `OE_BRIDGE_BIN` | `~/.kimi-webbridge/bin/kimi-webbridge.exe` | Daemon binary to auto-start if it isn't running. |
-| `OE_BROWSER_EXE` | auto-detected (Edge/Chrome) | Browser to auto-launch when the bridge extension isn't connected (i.e. the browser is closed). |
+| `OE_BRIDGE_BIN` | `~/.kimi-webbridge/bin/kimi-webbridge.exe` on Windows; **unset elsewhere** | Daemon binary to auto-start if it isn't running. Unset ⇒ no auto-start; run the bridge yourself. |
+| `OE_BROWSER_EXE` | auto-detected per platform (Edge/Chrome/Chromium) | Browser to auto-launch when the bridge extension isn't connected (i.e. the browser is closed). |
 | `OE_DATA_DIR` | `~/.openevidence` | Where the query log and rate log are written. |
 
 ### Install

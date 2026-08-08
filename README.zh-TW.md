@@ -76,19 +76,30 @@ OE 檢索到某篇 **review 全文**的一個片段，而那段話其實是該 r
 - **一個本機 browser-bridge daemon。** 這個 server 不爬蟲、也不偽造任何東西：它把每一次 OpenEvidence
   API 呼叫，當成 page-context `fetch()` 跑在**你自己那個已登入的 openevidence.com 分頁裡**，透過一支
   監聽 `127.0.0.1` 的小型本機 daemon 驅動。所以每個 request 都走**你自己的帳號與 session** —— 跟你親手
-  在那個分頁點下去完全一樣。參考實作對接名為 `kimi-webbridge` 的 daemon（預設 endpoint
-  `http://127.0.0.1:10086/command`）；只要能講同一套簡單的 `{action, args, session}` JSON 協定，
-  把 `OE_BRIDGE_URL` 指過去即可。OpenEvidence 沒有公開 API，且 session cookie 是 httpOnly，這正是為什麼
-  要用分頁內 fetch 而不是一般 HTTP client。
-- **Python 3.10+** 以及 `requirements.txt` 裡的相依套件（`mcp`）。
+  在那個分頁點下去完全一樣。參考實作對接的是
+  **[Kimi WebBridge](https://www.kimi.com/features/webbridge)** —— Moonshot Kimi 桌面版內建的
+  瀏覽器橋接（預設 endpoint `http://127.0.0.1:10086/command`）。**注意有同名的第三方專案，其中部分
+  會開一個未認證的 10086 port，本 repo 指的是官方那個。** 只要能講同一套簡單的
+  `{action, args, session}` JSON 協定，把 `OE_BRIDGE_URL` 指過去即可。OpenEvidence 沒有公開 API，
+  且 session cookie 是 httpOnly，這正是為什麼要用分頁內 fetch 而不是一般 HTTP client。
+- **Python 3.10+** 以及 `requirements.txt` 裡的相依套件（`mcp`，已鎖 `<2`，理由見下）。
+- **Windows、macOS、Linux 皆可。** 非 Windows 有一個限制：那些平台上 daemon 沒有可獨立執行的
+  binary（Kimi 桌面版本身就是 daemon），所以**請先自己把 bridge 開起來再用這個 server** —— 自動拉起
+  只在 Windows、或你把 `OE_BRIDGE_BIN` 指向一支吃 `start` 參數的執行檔時才有效。瀏覽器自動啟動三個
+  平台都可用。
+
+> **`mcp` 必須鎖在 2.0 以下。** mcp 2.0 移除了 `mcp.server.fastmcp`，沒鎖版本的全新安裝會裝到 2.x，
+> `server.py` 在 import 當下就死於 `ModuleNotFoundError` —— 而 MCP client 只會顯示
+> `Failed to connect — Connection closed`，害你往完全錯的方向找。`requirements.txt` 已經鎖好；
+> 手動安裝的話請自己也鎖。
 
 ### 設定（環境變數）
 
 | 變數 | 預設值 | 用途 |
 |---|---|---|
 | `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | browser-bridge daemon 的 endpoint。 |
-| `OE_BRIDGE_BIN` | `~/.kimi-webbridge/bin/kimi-webbridge.exe` | daemon 未啟動時要自動拉起的執行檔。 |
-| `OE_BROWSER_EXE` | 自動偵測（Edge/Chrome） | bridge extension 未連線（＝瀏覽器沒開）時要自動啟動的瀏覽器。 |
+| `OE_BRIDGE_BIN` | Windows 為 `~/.kimi-webbridge/bin/kimi-webbridge.exe`；**其他平台不設** | daemon 未啟動時要自動拉起的執行檔。不設＝不自動拉起，請自己開 bridge。 |
+| `OE_BROWSER_EXE` | 依平台自動偵測（Edge/Chrome/Chromium） | bridge extension 未連線（＝瀏覽器沒開）時要自動啟動的瀏覽器。 |
 | `OE_DATA_DIR` | `~/.openevidence` | query log 與 rate log 的寫入位置。 |
 
 ### 安裝

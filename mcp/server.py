@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -42,12 +43,17 @@ BASE_URL = "https://www.openevidence.com"
 #      them as a JSON string, so the body is pulled back in CHUNK-sized slices.
 KIMI_URL = os.environ.get("OE_BRIDGE_URL", "http://127.0.0.1:10086/command")
 KIMI_SESSION = "openevidence-mcp"
-KIMI_BIN = Path(
-    os.environ.get(
-        "OE_BRIDGE_BIN",
-        str(Path.home() / ".kimi-webbridge" / "bin" / "kimi-webbridge.exe"),
-    )
+# Auto-starting the daemon needs a binary to exec. Windows ships one at a known
+# path; on macOS/Linux the bridge is provided by the Kimi desktop app itself and has
+# no documented standalone path, so we do NOT guess one — KIMI_BIN stays None and the
+# daemon must already be running (or OE_BRIDGE_BIN must point at it). Naming a
+# `.exe` default there would only produce a nonsense "not installed at ...exe" error.
+_BRIDGE_BIN = os.environ.get("OE_BRIDGE_BIN") or (
+    str(Path.home() / ".kimi-webbridge" / "bin" / "kimi-webbridge.exe")
+    if sys.platform == "win32"
+    else None
 )
+KIMI_BIN = Path(_BRIDGE_BIN) if _BRIDGE_BIN else None
 CHUNK = 40_000          # verified intact end-to-end; keeps each evaluate response small
 POLL_INTERVAL_SEC = 2.0
 
@@ -59,6 +65,8 @@ if sys.platform == "darwin":
     _BROWSER_CANDIDATES = [
         "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        str(Path.home() / "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        str(Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
     ]
 elif sys.platform == "win32":
     _BROWSER_CANDIDATES = [
@@ -68,13 +76,32 @@ elif sys.platform == "win32":
         "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
     ]
 else:
+    # Linux: apt, snap and flatpak each install to a different prefix, so ask PATH
+    # first and only fall back to the fixed locations PATH would miss.
     _BROWSER_CANDIDATES = [
-        "/usr/bin/microsoft-edge",
-        "/usr/bin/google-chrome",
-        "/usr/bin/chromium",
+        p
+        for p in (
+            shutil.which("microsoft-edge"),
+            shutil.which("google-chrome"),
+            shutil.which("chromium"),
+            shutil.which("chromium-browser"),
+            "/snap/bin/chromium",
+        )
+        if p
     ]
 BROWSER_EXE = os.environ.get("OE_BROWSER_EXE") or next(
     (p for p in _BROWSER_CANDIDATES if Path(p).exists()), None
+)
+
+# Detach every child we spawn so it outlives this server process. The two Windows
+# flags below are imported from _winapi and therefore DO NOT EXIST off Windows —
+# merely naming them on macOS/Linux is an AttributeError, which is why this is a
+# platform switch rather than one shared kwargs dict. `start_new_session=True` is
+# the POSIX equivalent (setsid).
+_DETACH_KWARGS = (
+    {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+    if sys.platform == "win32"
+    else {"start_new_session": True}
 )
 
 
@@ -117,14 +144,21 @@ def _ensure_kimi_daemon() -> None:
     """Start the browser-bridge daemon if it isn't listening (no-ops if it is)."""
     if _kimi_daemon_up():
         return
+    if KIMI_BIN is None:
+        raise RuntimeError(
+            "browser-bridge daemon is not listening, and this platform has no known "
+            "binary to auto-start — start the bridge yourself (the Kimi desktop app "
+            "provides it: https://www.kimi.com/features/webbridge), or set "
+            "OE_BRIDGE_BIN to a daemon binary that accepts a `start` argument"
+        )
     if not KIMI_BIN.exists():
         raise RuntimeError(f"browser-bridge not installed at {KIMI_BIN}")
     subprocess.Popen(
         [str(KIMI_BIN), "start"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
+        **_DETACH_KWARGS,
     )
     for _ in range(30):  # cold start can take >10s
         time.sleep(1.0)
@@ -163,8 +197,8 @@ def _ensure_browser() -> None:
         [str(BROWSER_EXE)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
+        **_DETACH_KWARGS,
     )
     for _ in range(30):  # browser cold start + extension websocket handshake
         time.sleep(2.0)
