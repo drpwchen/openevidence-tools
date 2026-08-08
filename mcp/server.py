@@ -55,12 +55,24 @@ POLL_INTERVAL_SEC = 2.0
 # inside the browser does the actual work, so a closed browser means every
 # command fails even though the daemon answers. Set OE_BROWSER_EXE to the browser
 # that has the bridge extension installed; otherwise common paths are tried.
-_BROWSER_CANDIDATES = [
-    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
-    "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
-    "C:/Program Files/Google/Chrome/Application/chrome.exe",
-    "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-]
+if sys.platform == "darwin":
+    _BROWSER_CANDIDATES = [
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ]
+elif sys.platform == "win32":
+    _BROWSER_CANDIDATES = [
+        "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+        "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
+        "C:/Program Files/Google/Chrome/Application/chrome.exe",
+        "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+    ]
+else:
+    _BROWSER_CANDIDATES = [
+        "/usr/bin/microsoft-edge",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+    ]
 BROWSER_EXE = os.environ.get("OE_BROWSER_EXE") or next(
     (p for p in _BROWSER_CANDIDATES if Path(p).exists()), None
 )

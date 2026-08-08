@@ -1,3 +1,6 @@
 # OpenEvidence MCP server dependencies.
 # Python 3.10+ (uses `str | None` / `dict | None` syntax).
-mcp>=1.2.0
+# Upper bound matters: mcp 2.0 removed `mcp.server.fastmcp`, so an unpinned install
+# resolves to 2.x and server.py dies at import with ModuleNotFoundError — which an MCP
+# client only ever reports as "Failed to connect: Connection closed".
+mcp>=1.2.0,<2
