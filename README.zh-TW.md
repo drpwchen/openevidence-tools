@@ -93,6 +93,13 @@ OE 檢索到某篇 **review 全文**的一個片段，而那段話其實是該 r
 > `Failed to connect — Connection closed`，害你往完全錯的方向找。`requirements.txt` 已經鎖好；
 > 手動安裝的話請自己也鎖。
 
+> **🔒 把要害網站鎖在 bridge 碰不到的地方。** WebBridge 操作的是你**已經登入的真實**瀏覽器，
+> 而走 `chrome.debugger` API 的那類 bridge **一次就握有你所有網站的登入身分**——這正是它好用的原因。
+> 如果你同時讓 AI agent 開這個瀏覽器做事，建議把網銀、券商、信箱擋在它碰不到的地方，這樣被 prompt
+> injection 牽著走的 agent 也進不去。我為此做了一個小工具：
+> **[kimi-webbridge-lockdown](https://github.com/drpwchen/kimi-webbridge-lockdown)**（擴充設定裡的
+> 逐站「網站存取權」擋不住 debugger 型 bridge，要從瀏覽器政策層下手；這工具幫你設好，有引導、可還原）。
+
 ### 設定（環境變數）
 
 | 變數 | 預設值 | 用途 |

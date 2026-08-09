@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## Unreleased
+
+### Docs
+- README (both languages): added a security note pointing to
+  [kimi-webbridge-lockdown](https://github.com/drpwchen/kimi-webbridge-lockdown) — since
+  WebBridge drives your real logged-in browser, readers who also run an AI agent on it can fence
+  their bank / brokerage / mailbox out of the bridge's reach. No code change; no tag bump.
+
 ## [0.2.1] — 2026-08-08
 
 Cross-platform fixes. Thanks to [@drivysu](https://github.com/drivysu) (PR #1) for

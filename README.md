@@ -107,6 +107,15 @@ unverifiable) and an evidence-landscape summary.
 > only ever surfaces as `Failed to connect — Connection closed`, sending you hunting in the wrong
 > place. `requirements.txt` pins it; if you install by hand, pin it too.
 
+> **🔒 Lock your critical sites out of the bridge.** WebBridge drives your *real, logged-in*
+> browser, and the class of bridge that uses the `chrome.debugger` API holds your logged-in
+> identity on **every** site at once — which is what makes it useful here. If you also let an AI
+> agent drive that same browser, consider fencing your bank, brokerage, and mailbox out of its
+> reach so a prompt-injected agent can't wander into them. I made a small tool for exactly this:
+> **[kimi-webbridge-lockdown](https://github.com/drpwchen/kimi-webbridge-lockdown)** (the per-site
+> "site access" toggle in the extensions UI does *not* stop debugger-based bridges — you need the
+> browser policy layer; the tool sets it up, guided and reversible).
+
 ### Configuration (environment variables)
 
 | Variable | Default | Purpose |
