@@ -107,7 +107,8 @@ OE 檢索到某篇 **review 全文**的一個片段，而那段話其實是該 r
 | `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | browser-bridge daemon 的 endpoint。 |
 | `OE_BRIDGE_BIN` | Windows 為 `~/.kimi-webbridge/bin/kimi-webbridge.exe`；**其他平台不設** | daemon 未啟動時要自動拉起的執行檔。不設＝不自動拉起，請自己開 bridge。 |
 | `OE_BROWSER_EXE` | 依平台自動偵測（Edge/Chrome/Chromium） | bridge extension 未連線（＝瀏覽器沒開）時要自動啟動的瀏覽器。 |
-| `OE_DATA_DIR` | `~/.openevidence` | query log 與 rate log 的寫入位置。 |
+| `OE_DATA_DIR` | `~/.openevidence` | query log、rate log 與送出間隔狀態的寫入位置。 |
+| `OE_SUBMIT_SPACING_SEC` | `700`（約 11.7 分鐘） | 兩次送出問題之間的最小實際間隔。要調低，請先用你自己帳號的實測數據 —— 見下方說明。 |
 
 ### 安裝
 
@@ -129,12 +130,40 @@ claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
 
 - **你自己的帳號、你自己的 session。** 這個工具自動化的是*你*已登入的瀏覽器分頁。請只用在你本來就有權
   使用的帳號上，並遵守 OpenEvidence 的服務條款。
-- **尊重額度。** OpenEvidence 的帳號額度約為**每小時 100 個問題**，且只有新問題與追問會消耗額度
-  （重新取回舊答案免費）。Server 內建禮貌性的 rate limiter（滑動視窗 + 併發上限），預設值刻意保守 ——
-  請不要為了灌爆服務而調高它。
+- **尊重額度 —— 那是「間隔」，不是「配額桶」。** 2026-09 網站改版後，OpenEvidence 不再以「每小時 N 題」
+  節流，而是要求兩次送出之間有一段很長的**最小間隔**，而且被節流掉的請求似乎會*重新啟動*這段間隔，
+  不是免費的。單一帳號實測（2026-09-02）：間隔 ≥11 分鐘的送出全部成功（11、13、14、16 分鐘，4/4）；
+  間隔 6 分鐘失敗，幾分鐘內連發的批次也全部失敗。因此 server 會把送出序列化，並依
+  `OE_SUBMIT_SPACING_SEC`（預設 700 秒）配速，且把上次嘗試寫進 `OE_DATA_DIR/submit_state.json`，
+  **所以重開 server 不會把計時歸零**。只有新問題與追問會被配速，重新取回舊答案免費。
+- **收到 429 千萬不要馬上重試。** OE 自己回的 `Expected available in 0 seconds` 永遠是 0，不能用。
+  照它重試不會恢復，只會延長鎖定。所以 server 改成回報「下次什麼時候可以再送」而不重試 ——
+  你自己手動操作時也請照做。
 - **臨床使用前務必查核。** 在你要依賴某個 OE 答案之前，先跑 `/oe-verify`（或自行核對原始文獻）。
   這就是本 repo 的全部意義。
 - **這不是醫療建議。** 這些工具協助臨床工作者評估證據，不能取代臨床判斷，其輸出也不構成醫療建議。
+
+---
+
+## 當 OpenEvidence 改版時
+
+這裡沒有公開 API —— server 打的是網站自己在打的私有 endpoint，所以網站改版就可能整條路徑壞掉。
+**2026-08-26 那次改版**（新 sidebar、Discover、Tools、voice mode）就是一次全滅。五處 drift 都已在
+0.3.0 修好；值得寫下來，因為同樣形狀的問題還會再出現：
+
+| 症狀 | 真正原因 | 修法 |
+|---|---|---|
+| 送出永遠 `429 throttled` | 節流窗口被拉長到約 10 分鐘，**而且失敗的請求也會續命**。舊碼收到 429 後只等 2 秒就重試（OE 自己回的 `Expected available in 0 seconds` 永遠是 0，不可信），等於自己把帳號鎖死 | 改成跨程序的最小送出間隔；收到 429 直接回報下次可送的時間，不重試 |
+| payload 被拒 | `variant_configuration_file` 由 `minimal` 改為 `prod`；`component_config_version` 欄位已移除 | 對齊網站現行 payload |
+| 答案開頭混進一段 JSON | 生成步驟元件由 `Thinking` 改名 `InlineGenerationStep`，舊碼只跳過前者 | 兩個都跳過 |
+| 引用清單整個消失 | `structured_article.citations` 欄位被拿掉 | 改由 per-span citation 物件推導；舊欄位保留給改版前的文章 |
+| 有表格或圖片的答案，引用退化成無 PMID、無 provenance | 表格／圖片元件在 `raw_text` 展開成 `<mdtable>`／`<visual>` 區塊，裡面的 `[N]` 數量對不上元件 span 的 citation 物件數（實測一篇文章 7 個 marker 對 3 個物件），撞破引用比對的 1:1 前提，整篇答案因此退化 | 兩邊都排除元件區塊後再比對；只出現在元件裡的編號明確標成 metadata unavailable，不猜 |
+
+`<follow-up-question>`／`<follow-up-topic>`／`<visual>` 也是改版新增的包裝標籤，舊的
+「Would you like to explore」句子比對已經抓不到，尾巴的 chrome 因此漏進正文。兩種形式現在都會清掉。
+
+之後如果又壞了，最快的路就是這次用的方法：從自己瀏覽器的 network 面板看**網站本身**送了什麼，
+再跟這個 server 送的東西對照。
 
 ---
 

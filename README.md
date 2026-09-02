@@ -123,7 +123,8 @@ unverifiable) and an evidence-landscape summary.
 | `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | Browser-bridge daemon endpoint. |
 | `OE_BRIDGE_BIN` | `~/.kimi-webbridge/bin/kimi-webbridge.exe` on Windows; **unset elsewhere** | Daemon binary to auto-start if it isn't running. Unset ⇒ no auto-start; run the bridge yourself. |
 | `OE_BROWSER_EXE` | auto-detected per platform (Edge/Chrome/Chromium) | Browser to auto-launch when the bridge extension isn't connected (i.e. the browser is closed). |
-| `OE_DATA_DIR` | `~/.openevidence` | Where the query log and rate log are written. |
+| `OE_DATA_DIR` | `~/.openevidence` | Where the query log, rate log and submission-spacing state are written. |
+| `OE_SUBMIT_SPACING_SEC` | `700` (≈11.7 min) | Minimum wall-clock gap between two question submissions. Lower it only against measurements of your own account — see below. |
 
 ### Install
 
@@ -146,14 +147,46 @@ self-healing: it auto-starts the bridge daemon, auto-launches the browser if it 
 
 - **Your own account, your own session.** This tool automates *your* logged-in browser tab. Use
   it only with an account you are entitled to use, and follow OpenEvidence's terms of service.
-- **Respect the quota.** OpenEvidence's account quota is roughly **100 questions/hour**, and only
-  new questions and follow-ups spend it (re-fetching a prior answer is free). The server enforces
-  a built-in courtesy rate limiter (sliding window + concurrency cap) that stays conservative on
-  purpose — don't raise it to hammer the service.
+- **Respect the quota — it is a gap, not a bucket.** Since the 2026-09 site revamp OpenEvidence
+  no longer throttles by "N per hour" but by a long **minimum gap between submissions**, and a
+  throttled request appears to *re-arm* that gap rather than being free. Measured on one account
+  2026-09-02: submissions ≥11 min apart all succeeded (4/4 at 11, 13, 14 and 16 min); a 6-min gap
+  failed, as did every burst fired within a couple of minutes. So the server serialises
+  submissions and paces them at `OE_SUBMIT_SPACING_SEC` (default 700s), persisting the last
+  attempt to `OE_DATA_DIR/submit_state.json` so that **restarting the server does not reset the
+  clock**. Only new questions and follow-ups are paced; re-fetching a prior answer is free.
+- **Never retry straight after a 429.** OE's own `Expected available in 0 seconds` is always 0 and
+  cannot be used. Retrying on it does not recover — it extends the lockout. The server therefore
+  reports the time to come back instead of retrying, and you should do the same by hand.
 - **Verify before clinical use.** Run `/oe-verify` (or otherwise check the primary sources) before
   you rely on an OE answer. That is the entire point of this repo.
 - **Not medical advice.** These tools help a clinician evaluate evidence; they do not replace
   clinical judgment, and their output is not medical advice.
+
+---
+
+## When OpenEvidence changes its site
+
+There is no public API here — the server talks to the same private endpoints the website
+talks to, so a site revamp can break it. The **2026-08-26 revamp** (new sidebar, Discover,
+Tools, voice mode) broke every part of the path at once. All five faults are fixed in 0.3.0,
+and they are worth writing down because the same shapes will recur:
+
+| Symptom | Actual cause | Fix |
+|---|---|---|
+| Every submission returns `429 throttled` | The throttle window grew to roughly 10 minutes, **and a failed request extends it**. The old code retried 2s after a 429 (OE's own `Expected available in 0 seconds` is always 0 and cannot be used), which kept the account locked out indefinitely | Cross-process minimum spacing between submissions; a 429 reports when to come back instead of retrying |
+| Payload rejected | `variant_configuration_file` moved `minimal` → `prod`; `component_config_version` was removed | Payload realigned with what the site now sends |
+| A blob of JSON at the top of the answer | The generation-step component was renamed `Thinking` → `InlineGenerationStep`, and only the old name was being skipped | Skip both |
+| The citation list vanished entirely | `structured_article.citations` was removed | Derive the list from the per-span citation objects; keep the old field as the path for pre-revamp articles |
+| Answers containing a table or figure lost every PMID and corpus origin | Table/figure components expand into `<mdtable>` / `<visual>` regions in `raw_text`, whose `[N]` markers do not match the component span's citation objects one-for-one (7 markers against 3 objects in a live article). That broke the 1:1 assumption behind citation matching and degraded the whole answer | Match prose against prose — exclude component regions from both sides — and mark an index that appears *only* inside a component as metadata-unavailable rather than guessing |
+
+`<follow-up-question>` / `<follow-up-topic>` / `<visual>` are new wrapper tags too; the old
+"Would you like to explore" sentence match no longer fired, so that trailing chrome was
+leaking into the answer body. Both forms are now stripped.
+
+If something breaks again, the fastest route is the one used here: watch what the *website
+itself* sends from your own browser's network panel, and diff it against what this server
+sends.
 
 ---
 

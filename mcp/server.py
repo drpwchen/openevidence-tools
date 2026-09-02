@@ -296,21 +296,32 @@ RATE_LOG = DATA_DIR / "rate_log.jsonl"
 
 # Rate-limit settings — a courtesy throttle so this tool respects OpenEvidence's
 # own account-level limits (OE returns a "throttled" JSON response, handled below).
-# OE's account quota is roughly 100 questions/hour, and only new questions /
-# follow-ups spend it (fetch is free). These defaults stay conservative on purpose:
-# you are querying with your own account, so leave headroom.
-RL_WINDOW_SEC = 60          # sliding window length
-RL_MAX_IN_WINDOW = 5        # max queries inside the window
-RL_MAX_PARALLEL = 3         # hard concurrent cap
-RL_MAX_WAIT_SEC = 120       # max time to wait at window edge; beyond → fail fast
+#
+# The 2026-09 site revamp changed the shape of that limit: it is no longer "N per
+# hour" but a long minimum GAP between submissions, and a throttled POST appears
+# to re-arm the gap rather than being free. Measured 2026-09-02 on one account:
+# submissions spaced >=11 min apart all succeeded (4/4, at 11, 13, 14 and 16 min);
+# a 6-min gap failed, and so did every burst of several questions fired within a
+# couple of minutes. OE answers a throttled POST with
+#   429 {"code": "throttled", "detail": "... Expected available in 0 seconds."}
+# — that figure is always 0 and therefore useless, so pacing has to come from our
+# own wall clock. Retrying straight after a 429 does not recover, it re-arms the
+# lockout: one parallel batch on 2026-09-02 turned into days of total failure.
+# Hence: one submission at a time, one per SUBMIT_SPACING_SEC, and no fast retry.
+#
+# The spacing is enforced ACROSS PROCESSES — restarting the MCP server must not
+# reset it — so the last attempt is persisted to SUBMIT_STATE. Every *attempt* is
+# recorded, not just the successful ones.
+SUBMIT_SPACING_SEC = int(os.environ.get("OE_SUBMIT_SPACING_SEC", "700"))
+SUBMIT_STATE = DATA_DIR / "submit_state.json"
+RL_MAX_PARALLEL = 1         # OE throttles anything concurrent; serialise
+RL_MAX_WAIT_SEC = 240       # max time to wait inline; beyond → tell the caller when
 
 mcp = FastMCP("openevidence")
 
 # ------- Rate limiter (module-level, async-safe) -------
 import asyncio
-from collections import deque
 
-_rl_recent: deque = deque()   # monotonic timestamps of accepted starts
 _rl_lock = asyncio.Lock()
 _rl_sem = asyncio.Semaphore(RL_MAX_PARALLEL)
 
@@ -325,39 +336,56 @@ def _rate_log(event: str, **kwargs) -> None:
         pass
 
 
+def _last_submit_ts() -> float:
+    """Epoch seconds of the last POST /api/article *attempt*, 0 when unknown."""
+    try:
+        return float(json.loads(SUBMIT_STATE.read_text(encoding="utf-8"))["last_submit"])
+    except Exception:
+        return 0.0
+
+
+def _record_submit_attempt() -> None:
+    try:
+        SUBMIT_STATE.parent.mkdir(parents=True, exist_ok=True)
+        SUBMIT_STATE.write_text(json.dumps({"last_submit": time.time()}), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _submit_wait_needed() -> float:
+    """Seconds still to wait before the next submission may go out."""
+    last = _last_submit_ts()
+    if not last:
+        return 0.0
+    return max(0.0, last + SUBMIT_SPACING_SEC - time.time())
+
+
 async def _rate_acquire() -> str | None:
-    """Acquire rate-limit + concurrency slot.
+    """Acquire the submission slot: one at a time, one per SUBMIT_SPACING_SEC.
 
     Returns:
         None on success (caller must finally _rate_release()),
-        Error string if window-wait exceeds RL_MAX_WAIT_SEC.
+        Error string when the caller would have to wait longer than
+        RL_MAX_WAIT_SEC — it says when to come back rather than blocking, since
+        ask_openevidence has its own 300s wall-clock budget.
     """
-    # Sliding window
     async with _rl_lock:
-        now = time.monotonic()
-        while _rl_recent and now - _rl_recent[0] > RL_WINDOW_SEC:
-            _rl_recent.popleft()
-        if len(_rl_recent) >= RL_MAX_IN_WINDOW:
-            wait_until = _rl_recent[0] + RL_WINDOW_SEC
-            wait = wait_until - now + 0.5
-            if wait > RL_MAX_WAIT_SEC:
-                _rate_log("blocked_window", in_window=len(_rl_recent), wait_needed=round(wait, 1))
-                return (
-                    f"Rate-limit: {len(_rl_recent)} queries already in last {RL_WINDOW_SEC}s "
-                    f"(max {RL_MAX_IN_WINDOW}). Would need to wait {wait:.0f}s, exceeds RL_MAX_WAIT_SEC={RL_MAX_WAIT_SEC}s. "
-                    f"Spread queries out or wait."
-                )
-            _rate_log("queued", in_window=len(_rl_recent), wait_sec=round(wait, 1))
+        wait = _submit_wait_needed()
+        if wait > RL_MAX_WAIT_SEC:
+            ready = time.strftime("%H:%M:%S", time.localtime(time.time() + wait))
+            _rate_log("blocked_spacing", wait_needed=round(wait, 1))
+            return (
+                f"Rate-limit: OpenEvidence accepts roughly one new question per "
+                f"{SUBMIT_SPACING_SEC // 60} min. Next submission allowed at {ready} "
+                f"(in {wait / 60:.1f} min). Do NOT retry sooner — a throttled request "
+                f"restarts the wait. Space batched questions out accordingly."
+            )
+        if wait > 0:
+            _rate_log("queued", wait_sec=round(wait, 1))
             await asyncio.sleep(wait)
-            # re-purge
-            now = time.monotonic()
-            while _rl_recent and now - _rl_recent[0] > RL_WINDOW_SEC:
-                _rl_recent.popleft()
-        _rl_recent.append(time.monotonic())
 
-    # 3. Parallel cap
     await _rl_sem.acquire()
-    _rate_log("acquired", in_window=len(_rl_recent), inflight=RL_MAX_PARALLEL - _rl_sem._value)
+    _rate_log("acquired", inflight=RL_MAX_PARALLEL - _rl_sem._value)
     return None
 
 
@@ -412,16 +440,28 @@ def _log_query(question: str, article_id: str, parent_id: str | None = None) -> 
 
 
 def _submit_article(payload: dict) -> dict:
-    """POST /api/article via the bridge, retrying once on OE's own throttle."""
+    """POST /api/article via the bridge. One attempt — never a fast retry.
+
+    The old code retried after the number OE puts in the throttle detail, which
+    is always "0 seconds"; that turned every throttled call into a tight retry
+    loop that kept the account locked out. A 429 now returns immediately with the
+    time the next attempt is allowed, and the attempt is recorded either way so
+    that the spacing in _rate_acquire counts it.
+    """
+    _record_submit_attempt()
     status, body = _relay_request("POST", "/api/article", payload)
     resp_body = _parse_submit_response(status, body)
-    if "throttled" in json.dumps(resp_body):
-        detail = resp_body.get("errors", [{}])[0].get("detail", "")
-        wait_match = re.search(r'(\d+)\s*second', detail)
-        wait_secs = int(wait_match.group(1)) + 2 if wait_match else 10
-        time.sleep(wait_secs)
-        status, body = _relay_request("POST", "/api/article", payload)
-        resp_body = _parse_submit_response(status, body)
+    if status == 429 or "throttled" in json.dumps(resp_body):
+        ready = time.strftime("%H:%M:%S", time.localtime(time.time() + SUBMIT_SPACING_SEC))
+        _rate_log("throttled_by_oe")
+        return {
+            "__autherr__": (
+                f"OpenEvidence throttled the submission (HTTP {status}). Its own "
+                f"'expected available' figure is always 0s and cannot be trusted. "
+                f"Wait until about {ready} before asking again — retrying sooner "
+                f"restarts the lockout."
+            )
+        }
     return resp_body
 
 
@@ -435,8 +475,7 @@ def _ask_oe_followup(parent_article_id: str, followup_question: str) -> dict:
             "question": followup_question,
             "attachments": [],
             "use_gatekeeper": True,
-            "component_config_version": "stable",
-            "variant_configuration_file": "minimal",
+            "variant_configuration_file": "prod",
         },
         "original_article": parent_article_id,
         "personalization_enabled": False,
@@ -476,7 +515,10 @@ def _extract_text(data: dict) -> str:
     raw = data.get("output", {}).get("text", "")
     lines = []
     for line in raw.split("\n"):
-        if line.startswith("REACTCOMPONENT!:!Thinking"):
+        # Progress chrome, not prose. OE renamed this component in the 2026-09
+        # site revamp (Thinking -> InlineGenerationStep); match both so the raw
+        # {"steps": [...]} JSON never leaks into the answer.
+        if line.startswith(("REACTCOMPONENT!:!Thinking", "REACTCOMPONENT!:!InlineGenerationStep")):
             continue
         if line.startswith("REACTCOMPONENT!:!"):
             parts = line.split("!:!", 2)
@@ -496,17 +538,35 @@ def _extract_text(data: dict) -> str:
 
 
 def _extract_citations(data: dict) -> list[dict]:
+    """Bibliography for the plain (non-preserve_citations) answer.
+
+    The 2026-09 site revamp dropped `structured_article.citations`; the per-span
+    citation objects that _build_citation_data walks are now the only place the
+    metadata survives. Derive the simple list from those, keeping the old key as
+    the path for articles created before the revamp.
+    """
     sa = data.get("output", {}).get("structured_article", {})
     citations = sa.get("citations", [])
+    if citations:
+        result = []
+        for c in citations:
+            entry = {"title": c.get("title", "")}
+            if c.get("url"):
+                entry["url"] = c["url"]
+            if c.get("doi"):
+                entry["doi"] = c["doi"]
+            if c.get("published_date"):
+                entry["date"] = c["published_date"]
+            result.append(entry)
+        return result
+
     result = []
-    for c in citations:
-        entry = {"title": c.get("title", "")}
-        if c.get("url"):
-            entry["url"] = c["url"]
-        if c.get("doi"):
-            entry["doi"] = c["doi"]
-        if c.get("published_date"):
-            entry["date"] = c["published_date"]
+    for c in _build_citation_data(data):
+        entry = {"index": c.get("index"), "title": c.get("title", "")}
+        for key in ("url", "doi", "date", "journal"):
+            if c.get(key):
+                # per-span dates are full timestamps; the old key was date-only
+                entry[key] = c[key][:10] if key == "date" else c[key]
         result.append(entry)
     return result
 
@@ -517,8 +577,17 @@ def _extract_raw_text(data: dict) -> str:
     raw = sa.get("raw_text", "")
     if not raw:
         return _extract_text(data)
-    # Strip trailing follow-up question
+    # Strip the trailing follow-up block. Pre-revamp it was a bare sentence;
+    # since 2026-09 OE wraps it in <follow-up-question>/<follow-up-topic> tags,
+    # so the old sentence match no longer fired and the chrome leaked into the
+    # answer. Both forms end the article, so cut from either.
+    raw = re.sub(r'\n*<follow-up-(question|topic)[ >].*$', '', raw, flags=re.DOTALL)
     raw = re.sub(r'\n\nWould you like to explore.*$', '', raw, flags=re.DOTALL)
+    # <visual> marks an inline figure reference; keep the reference, drop the tag.
+    raw = re.sub(r'</?visual>', '', raw)
+    # The revamp also wraps tables in <mdtable>...</mdtable>; the markdown inside
+    # is already fine, only the wrapper has to go.
+    raw = re.sub(r'</?mdtable>\n?', '', raw)
     return raw.strip()
 
 
@@ -670,15 +739,29 @@ def _build_citation_data(data: dict) -> list[dict]:
     raw_text = sa.get("raw_text", "")
     output_text = data.get("output", {}).get("text", "")
 
-    # Citation objects in document order — one per marker occurrence.
+    # Embedded components break the 1:1 rule. The 2026-09 revamp renders each
+    # REACTCOMPONENT span into raw_text as its own region — a table as
+    # <mdtable>...</mdtable>, a figure as <visual>...</visual> — and the markers
+    # inside that region do not correspond one-for-one to the component span's
+    # citation objects: a live 2026-09-02 article had 7 table markers against 3
+    # objects. Counting them on either side pushed every answer containing a
+    # table or figure into the degraded branch below, losing PMIDs and corpus
+    # provenance. So match prose against prose — drop the component regions from
+    # the marker count and the component spans from the objects — and treat an
+    # index that appears only inside a component as unknown rather than guess.
+    prose_text = re.sub(r"<(mdtable|visual)>.*?</\1>", "", raw_text, flags=re.DOTALL)
+
+    # Citation objects in document order — one per prose marker occurrence.
     flat: list[dict] = [
         cit
         for section in sa.get("articlesection_set", [])
         for para in section.get("articleparagraph_set", [])
         for span in para.get("articlespan_set", [])
+        if not (span.get("text") or "").startswith("REACTCOMPONENT!:!")
         for cit in span.get("citations", [])
     ]
-    occurrences = [int(m) for m in re.findall(r"\[(\d+)\]", raw_text)]
+    occurrences = [int(m) for m in re.findall(r"\[(\d+)\]", prose_text)]
+    all_indices = {int(m) for m in re.findall(r"\[(\d+)\]", raw_text)}
 
     result: list[dict] = []
     if flat and len(flat) == len(occurrences):
@@ -686,6 +769,8 @@ def _build_citation_data(data: dict) -> list[dict]:
         for n, cit in zip(occurrences, flat):
             if n not in by_index:            # same index recurs; first occurrence wins
                 by_index[n] = _citation_entry(cit, n)
+        for n in sorted(all_indices - set(by_index)):
+            by_index[n] = {"index": n, "title": f"(citation {n} — cited only in a table or figure, metadata unavailable)"}
         result = [by_index[n] for n in sorted(by_index)]
     else:
         # Length mismatch → the positional guarantee is void. Degrade explicitly.
@@ -713,8 +798,7 @@ def _ask_openevidence(question: str) -> dict:
     payload = {
         "article_type": "Ask OpenEvidence Light with citations",
         "inputs": {
-            "variant_configuration_file": "minimal",
-            "component_config_version": "stable",
+            "variant_configuration_file": "prod",
             "attachments": [],
             "question": question,
             "use_gatekeeper": True,
@@ -803,7 +887,7 @@ async def ask_openevidence(question: str, preserve_citations: bool = False) -> s
     if citations:
         result += "\n\n## Citations\n"
         for i, c in enumerate(citations, 1):
-            line = f"{i}. {c['title']}"
+            line = f"{c.get('index', i)}. {c['title']}"
             if c.get("doi"):
                 line += f" (DOI: {c['doi']})"
             if c.get("date"):
@@ -844,7 +928,7 @@ def _format_result(data: dict, preserve_citations: bool = False) -> str:
     if citations:
         result += "\n\n## Citations\n"
         for i, c in enumerate(citations, 1):
-            line = f"{i}. {c['title']}"
+            line = f"{c.get('index', i)}. {c['title']}"
             if c.get("doi"):
                 line += f" (DOI: {c['doi']})"
             if c.get("date"):
