@@ -72,41 +72,55 @@ OE 檢索到某篇 **review 全文**的一個片段，而那段話其實是該 r
 
 ## 需求
 
-- **一個 OpenEvidence 帳號**（OpenEvidence 面向臨床工作者）。登入由你自己在平常用的瀏覽器完成。
-- **一個本機 browser-bridge daemon。** 這個 server 不爬蟲、也不偽造任何東西：它把每一次 OpenEvidence
-  API 呼叫，當成 page-context `fetch()` 跑在**你自己那個已登入的 openevidence.com 分頁裡**，透過一支
-  監聽 `127.0.0.1` 的小型本機 daemon 驅動。所以每個 request 都走**你自己的帳號與 session** —— 跟你親手
-  在那個分頁點下去完全一樣。參考實作對接的是
-  **[Kimi WebBridge](https://www.kimi.com/features/webbridge)** —— Moonshot Kimi 桌面版內建的
-  瀏覽器橋接（預設 endpoint `http://127.0.0.1:10086/command`）。**注意有同名的第三方專案，其中部分
-  會開一個未認證的 10086 port，本 repo 指的是官方那個。** 只要能講同一套簡單的
-  `{action, args, session}` JSON 協定，把 `OE_BRIDGE_URL` 指過去即可。OpenEvidence 沒有公開 API，
-  且 session cookie 是 httpOnly，這正是為什麼要用分頁內 fetch 而不是一般 HTTP client。
-- **Python 3.10+** 以及 `requirements.txt` 裡的相依套件（`mcp`，已鎖 `<2`，理由見下）。
-- **Windows、macOS、Linux 皆可。** 非 Windows 有一個限制：那些平台上 daemon 沒有可獨立執行的
-  binary（Kimi 桌面版本身就是 daemon），所以**請先自己把 bridge 開起來再用這個 server** —— 自動拉起
-  只在 Windows、或你把 `OE_BRIDGE_BIN` 指向一支吃 `start` 參數的執行檔時才有效。瀏覽器自動啟動三個
-  平台都可用。
+- **一個 OpenEvidence 帳號**（OpenEvidence 面向臨床工作者）。登入由你自己完成，只要一次，
+  在 server 幫你打開的那個瀏覽器視窗裡登入。
+- **裝好 Edge、Chrome 或 Chromium**——**Windows、macOS、Linux 皆可**。這個 server 不爬蟲、也不偽造
+  任何東西：它把每一次 OpenEvidence API 呼叫，當成 page-context `fetch()` 跑在**一個已登入的
+  openevidence.com 分頁裡**，所以每個 request 都走**你自己的帳號與 session**——跟你親手在那個分頁
+  點下去完全一樣。OpenEvidence 沒有公開 API，且 session cookie 是 httpOnly，這正是為什麼要用分頁內
+  fetch 而不是一般 HTTP client。
+
+  預設（transport `cdp`）會用**獨立的 profile**（`~/.openevidence/browser-profile`）**另開一份你
+  的瀏覽器**，透過 Playwright 走 Chrome DevTools Protocol（`127.0.0.1:9222`）驅動它。需要時自動啟動、
+  用完不關；不下載任何東西，也不碰你平常用的瀏覽器 profile。不需要擴充功能，也不需要第三方 daemon。
+- **Python 3.10+** 以及 `requirements.txt` 裡的相依套件（`mcp`，已鎖 `<2`，理由見下；以及
+  `playwright`）。只需要 Python 套件本身：**不用跑 `playwright install`**，它接的是你已經裝好的瀏覽器。
 
 > **`mcp` 必須鎖在 2.0 以下。** mcp 2.0 移除了 `mcp.server.fastmcp`，沒鎖版本的全新安裝會裝到 2.x，
 > `server.py` 在 import 當下就死於 `ModuleNotFoundError` —— 而 MCP client 只會顯示
 > `Failed to connect — Connection closed`，害你往完全錯的方向找。`requirements.txt` 已經鎖好；
 > 手動安裝的話請自己也鎖。
 
-> **🔒 把要害網站鎖在 bridge 碰不到的地方。** WebBridge 操作的是你**已經登入的真實**瀏覽器，
-> 而走 `chrome.debugger` API 的那類 bridge **一次就握有你所有網站的登入身分**——這正是它好用的原因。
-> 如果你同時讓 AI agent 開這個瀏覽器做事，建議把網銀、券商、信箱擋在它碰不到的地方，這樣被 prompt
-> injection 牽著走的 agent 也進不去。我為此做了一個小工具：
-> **[kimi-webbridge-lockdown](https://github.com/drpwchen/kimi-webbridge-lockdown)**（擴充設定裡的
-> 逐站「網站存取權」擋不住 debugger 型 bridge，要從瀏覽器政策層下手；這工具幫你設好，有引導、可還原）。
+> **🔒 那個專用瀏覽器只登入 OpenEvidence。** 它開著的時候，你這台電腦上的任何程式都能透過除錯埠
+> 操作它（埠只聽 `127.0.0.1`，不對網路開放）。這正是它要用獨立 profile 的原因：專門給 OpenEvidence
+> 用，網銀、信箱或其他任何帳號都不要在那裡登入。
+
+<details>
+<summary>舊 transport：Kimi WebBridge（<code>OE_TRANSPORT=http</code>）</summary>
+
+0.3.x 以前透過 **[Kimi WebBridge](https://www.kimi.com/features/webbridge)**（瀏覽器擴充功能＋
+`http://127.0.0.1:10086/command` 的本機 daemon）驅動你*平常用的*瀏覽器。這條路仍可用：設
+`OE_TRANSPORT=http`，或把 `OE_BRIDGE_URL` 指向任何講同一套 `{action, args, session}` JSON 協定的
+daemon（光是設了 `OE_BRIDGE_URL` 就會選這條，所以既有設定照常運作）。注意有同名的第三方專案，其中
+部分會開一個未認證的 10086 port，這裡指的是官方那個。daemon 只在 Windows（或 `OE_BRIDGE_BIN` 指向
+一支吃 `start` 參數的執行檔時）會自動拉起；macOS／Linux 請自己先開 bridge。debugger 型 bridge
+一次就握有你所有網站的登入身分——如果你用它，建議用
+**[kimi-webbridge-lockdown](https://github.com/drpwchen/kimi-webbridge-lockdown)** 把網銀、券商、
+信箱擋在它碰不到的地方。
+
+</details>
 
 ### 設定（環境變數）
 
 | 變數 | 預設值 | 用途 |
 |---|---|---|
-| `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | browser-bridge daemon 的 endpoint。 |
-| `OE_BRIDGE_BIN` | Windows 為 `~/.kimi-webbridge/bin/kimi-webbridge.exe`；**其他平台不設** | daemon 未啟動時要自動拉起的執行檔。不設＝不自動拉起，請自己開 bridge。 |
-| `OE_BROWSER_EXE` | 依平台自動偵測（Edge/Chrome/Chromium） | bridge extension 未連線（＝瀏覽器沒開）時要自動啟動的瀏覽器。 |
+| `OE_TRANSPORT` | `cdp`（有設 `OE_BRIDGE_URL` 時為 `http`） | `cdp`＝走 DevTools 的專用瀏覽器；`http`＝舊的 Kimi WebBridge daemon。 |
+| `OE_BROWSER_EXE` | 依平台自動偵測（Edge/Chrome/Chromium） | 瀏覽器沒開時要啟動的瀏覽器。 |
+| `OE_CDP_PORT` | `9222` | 專用瀏覽器的 DevTools 埠。9222 已被別的東西占用就改掉。這個埠上已經有瀏覽器在回應的話，server 直接用它、不另開。 |
+| `OE_CDP_PROFILE` | `<OE_DATA_DIR>/browser-profile` | 專用瀏覽器的 profile 目錄——你的 OpenEvidence 登入狀態存在這裡。 |
+| `OE_BROWSER_ARGS` | *（空）* | 啟動專用瀏覽器時額外加的參數，例如在 container 裡加 `--no-sandbox`。瀏覽器起不來時，它自己的輸出在 `<OE_DATA_DIR>/browser-launch.log`，錯誤訊息也會引用。 |
+| `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | 僅 `http` transport：browser-bridge daemon 的 endpoint。 |
+| `OE_BRIDGE_BIN` | Windows 為 `~/.kimi-webbridge/bin/kimi-webbridge.exe`；**其他平台不設** | 僅 `http` transport：要自動拉起的 daemon 執行檔。不設＝不自動拉起。 |
 | `OE_DATA_DIR` | `~/.openevidence` | query log、rate log 與送出間隔狀態的寫入位置。 |
 | `OE_SUBMIT_SPACING_SEC` | `700`（約 11.7 分鐘） | 兩次送出問題之間的最小實際間隔。要調低，請先用你自己帳號的實測數據 —— 見下方說明。 |
 
@@ -115,14 +129,28 @@ OE 檢索到某篇 **review 全文**的一個片段，而那段話其實是該 r
 ```bash
 pip install -r requirements.txt
 
+# 在它打開的專用瀏覽器裡登入 OpenEvidence 一次：
+python mcp/server.py --login
+
 # 註冊到 MCP client，例如 Claude Code：
 claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
 
 # 把 skills/oe-verify/ 放到你的 client 會掃描 skill 的位置。
 ```
 
-在平常用的瀏覽器登入 openevidence.com 一次即可。之後 server 會自我修復：daemon 沒跑會自動拉起、
-瀏覽器沒開會自動啟動（該瀏覽器要裝好 bridge extension），並自動開啟或重用一個 OpenEvidence 分頁。
+登入狀態存在專用 profile 裡；只有 OpenEvidence 把你登出時才需要再跑一次 `--login`。之後 server 會
+自我修復：瀏覽器沒開會自動啟動、瀏覽器重開過會自動重連，並自動開啟或重用一個 OpenEvidence 分頁。
+出現 `Not authenticated` 就是 session 過期了——再跑一次 `--login`。
+
+不碰 OpenEvidence、先確認你這台機器上 transport 能動（會開一個用完即丟的瀏覽器 profile，對本機的
+替身 server 跑完整流程，再關掉）：
+
+```bash
+python tests/smoke_cdp.py              # 沒有螢幕的 Linux：xvfb-run -a python tests/smoke_cdp.py
+python -m unittest discover -s tests   # 單元測試，不需要瀏覽器
+```
+
+這兩項都在 CI 的 Windows、macOS、Linux 上跑。
 
 ---
 
@@ -184,12 +212,12 @@ Layer 1 與 Layer 3 就是他的 Phase 3 與 Phase 4。讀我們的驗證報告�
 
 **[openevidence-mcp](https://github.com/htlin222/openevidence-mcp)**（Apache-2.0）貢獻了 transport
 的想法，讓我們脫困：OpenEvidence 沒有公開 API、session cookie 又是 httpOnly，所以不要去爬它 ——
-直接讓請求跑在臨床醫師自己那個已登入的瀏覽器分頁裡。實作是我們自己寫的（驅動的 daemon 也不同），
-但方向是他指的。
+直接讓請求跑在臨床醫師自己那個已登入的瀏覽器分頁裡。實作是我們自己寫的（現在改用 DevTools Protocol 驅動專用瀏覽器，
+不靠擴充功能），但方向是他指的。
 
 我們自己寫了一層 tool layer 而不是 fork，理由很實際：verifier 需要 `publication_types`、
 `impact_score`、`recency_score`、`is_guideline` 與 per-chunk `origin` 直接從 MCP contract 回傳，
-而且我們驅動的是通用型 browser daemon，不是專屬 extension。我們另外加了他的 skill 沒有的
+而且我們是透過通用管道驅動瀏覽器，不是專屬 extension。我們另外加了他的 skill 沒有的
 completeness layer（OE **漏掉**了什麼？）、CrossRef 存在性 gate，以及我們這種架構才需要的
 marker↔citation index 對應。這些是加在他的地基上，不是取代它。
 

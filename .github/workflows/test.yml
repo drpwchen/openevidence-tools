@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  transport:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements.txt
+      # No `playwright install`: the server attaches to the runner's own Chrome/Edge.
+      - name: Unit tests (no browser)
+        run: python -m unittest discover -s tests -v
+      - name: Real-browser smoke test (Linux, virtual display)
+        if: runner.os == 'Linux'
+        # The Ubuntu 24.04 runner blocks unprivileged user namespaces (AppArmor), so the
+        # browser's sandbox cannot start. Re-allow them rather than run with --no-sandbox.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run -a python tests/smoke_cdp.py
+      - name: Real-browser smoke test
+        if: runner.os != 'Linux'
+        run: python tests/smoke_cdp.py

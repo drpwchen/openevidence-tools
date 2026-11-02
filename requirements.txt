@@ -4,3 +4,8 @@
 # resolves to 2.x and server.py dies at import with ModuleNotFoundError — which an MCP
 # client only ever reports as "Failed to connect: Connection closed".
 mcp>=1.2.0,<2
+
+# Default "cdp" transport: attaches to your own Edge / Chrome / Chromium over the DevTools
+# Protocol. Only the Python package is needed — skip `playwright install`, no bundled
+# browser is downloaded or used. (Not needed with OE_TRANSPORT=http.)
+playwright>=1.40

@@ -3,6 +3,46 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [0.4.0] — 2026-11-02
+
+**A built-in, cross-platform browser transport. No extension or third-party daemon needed.**
+The server now starts a dedicated copy of your own Edge / Chrome / Chromium on a separate
+profile and drives it over the Chrome DevTools Protocol. It works the same way on Windows,
+macOS and Linux, and CI exercises it on all three.
+
+### Added
+- **`cdp` transport (new default).** A Chromium-family browser is auto-detected
+  (`OE_BROWSER_EXE` overrides), launched on demand with its own profile
+  (`OE_CDP_PROFILE`, default `~/.openevidence/browser-profile`) and a DevTools port bound to
+  `127.0.0.1` (`OE_CDP_PORT`, default `9222`), and driven through Playwright. Only the Python
+  package is needed; skip `playwright install`, because nothing is downloaded. If a browser
+  already answers on the port, it is reused. The fire-and-forget fetch, polling and chunked
+  read-back protocol and all answer / `## Citation Data` parsing are unchanged.
+- **`python mcp/server.py --login`** opens OpenEvidence in that browser so you can log in once.
+  The login persists in the profile.
+- **`OE_TRANSPORT`** (`cdp` | `http`) selects the transport explicitly.
+- **`OE_BROWSER_ARGS`** passes extra launch flags, such as `--no-sandbox` in a container. When
+  the browser fails to start, its own output is kept in `<OE_DATA_DIR>/browser-launch.log` and
+  quoted in the error, rather than discarded.
+- **Tests.** `tests/test_transport.py` holds unit tests that need no browser.
+  `tests/smoke_cdp.py` is a real-browser smoke test: it runs the server's actual request path
+  against a local stand-in for openevidence.com, so it touches no account and no quota.
+  `.github/workflows/test.yml` runs both on Windows, macOS and Linux × Python 3.10 / 3.13.
+
+### Changed
+- `requirements.txt` adds `playwright>=1.40`.
+- The `Not authenticated` error now points at `--login`.
+- README (both languages): requirements, configuration and install were rewritten around the new
+  transport. The Kimi WebBridge material moved into a collapsed "legacy transport" section.
+- `skills/oe-verify/SKILL.md`: the transport troubleshooting note was updated.
+
+### Migrating from 0.3.x
+- **If you set `OE_BRIDGE_URL`**, nothing changes: that still selects the Kimi WebBridge
+  (`http`) transport.
+- **If you relied on the defaults**, run `pip install -r requirements.txt`, then
+  `python mcp/server.py --login` once. To stay on Kimi WebBridge without setting anything else,
+  use `OE_TRANSPORT=http`.
+
 ## [0.3.0] — 2026-09-02
 
 **Repairs the 2026-08-26 OpenEvidence site revamp, which broke every part of the path.**

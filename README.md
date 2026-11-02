@@ -83,46 +83,62 @@ unverifiable) and an evidence-landscape summary.
 ## Requirements
 
 - **An OpenEvidence account** (OpenEvidence is intended for clinicians). You log in yourself,
-  in your normal browser.
-- **A local browser-bridge daemon.** The server does not scrape or spoof anything: it runs each
-  OpenEvidence API call as a page-context `fetch()` **inside your own already-logged-in
-  openevidence.com browser tab**, driven through a small local daemon that listens on
-  `127.0.0.1`. Every request therefore uses *your own account and session* — exactly what would
-  happen if you clicked in the tab yourself. The reference implementation targets
-  **[Kimi WebBridge](https://www.kimi.com/features/webbridge)**, the browser bridge built into
-  Moonshot's Kimi desktop app (default endpoint `http://127.0.0.1:10086/command`) — note there
-  are unrelated third-party projects using the name `kimi-webbridge`, some of which expose an
-  *unauthenticated* port 10086; this repo means the official one. Point `OE_BRIDGE_URL` at any
-  daemon that speaks the same simple `{action, args, session}` JSON contract. OpenEvidence has no
-  public API and its session cookie is httpOnly, which is why an in-tab fetch (rather than a
-  plain HTTP client) is used at all.
-- **Python 3.10+** and the deps in `requirements.txt` (`mcp`, pinned `<2` — see below).
-- **Windows, macOS or Linux.** One caveat off Windows: the daemon has no documented standalone
-  binary there (the Kimi desktop app *is* the daemon), so **start the bridge yourself before
-  using the server** — auto-start only works on Windows, or wherever you point `OE_BRIDGE_BIN`
-  at a binary that accepts a `start` argument. Browser auto-launch works on all three.
+  once, in the browser window the server opens for you.
+- **Edge, Chrome or Chromium** installed — on **Windows, macOS or Linux**. The server does not
+  scrape or spoof anything: it runs each OpenEvidence API call as a page-context `fetch()`
+  **inside a logged-in openevidence.com tab**, so every request uses *your own account and
+  session* — exactly what would happen if you clicked in the tab yourself. OpenEvidence has no
+  public API and its session cookie is httpOnly, which is why an in-tab fetch (rather than a plain
+  HTTP client) is used at all.
+
+  By default (transport `cdp`) the server starts **a dedicated copy of your browser on its own
+  profile** (`~/.openevidence/browser-profile`) and drives it over the Chrome DevTools Protocol
+  on `127.0.0.1:9222`, through Playwright. It is launched on demand and left running; nothing is
+  downloaded, and your everyday browser profile is never touched. No extension, no third-party
+  daemon.
+- **Python 3.10+** and the deps in `requirements.txt` (`mcp`, pinned `<2` — see below — and
+  `playwright`). Only the Python package is needed: **skip `playwright install`**, it attaches to
+  the browser you already have.
 
 > **`mcp` must stay below 2.0.** mcp 2.0 removed `mcp.server.fastmcp`, so an unpinned install
 > resolves to 2.x and `server.py` dies at import with `ModuleNotFoundError` — which an MCP client
 > only ever surfaces as `Failed to connect — Connection closed`, sending you hunting in the wrong
 > place. `requirements.txt` pins it; if you install by hand, pin it too.
 
-> **🔒 Lock your critical sites out of the bridge.** WebBridge drives your *real, logged-in*
-> browser, and the class of bridge that uses the `chrome.debugger` API holds your logged-in
-> identity on **every** site at once — which is what makes it useful here. If you also let an AI
-> agent drive that same browser, consider fencing your bank, brokerage, and mailbox out of its
-> reach so a prompt-injected agent can't wander into them. I made a small tool for exactly this:
-> **[kimi-webbridge-lockdown](https://github.com/drpwchen/kimi-webbridge-lockdown)** (the per-site
-> "site access" toggle in the extensions UI does *not* stop debugger-based bridges — you need the
-> browser policy layer; the tool sets it up, guided and reversible).
+> **🔒 Log in to OpenEvidence only, in the dedicated browser.** While it runs, any program on
+> your own machine can drive that browser through its debugging port (the port listens on
+> `127.0.0.1` only, never on the network). That is exactly why it gets a separate profile: keep
+> it for OpenEvidence, and do not sign in to your bank, mail or anything else there.
+
+<details>
+<summary>Legacy transport: Kimi WebBridge (<code>OE_TRANSPORT=http</code>)</summary>
+
+Versions up to 0.3.x drove your *everyday* browser through
+**[Kimi WebBridge](https://www.kimi.com/features/webbridge)** (a browser extension plus a local
+daemon on `http://127.0.0.1:10086/command`). It still works: set `OE_TRANSPORT=http`, or set
+`OE_BRIDGE_URL` to any daemon that speaks the same `{action, args, session}` JSON contract
+(setting `OE_BRIDGE_URL` selects this transport by itself, so existing configurations keep
+working). Note there are unrelated third-party projects using the name `kimi-webbridge`, some of
+which expose an *unauthenticated* port 10086; this means the official one. The daemon auto-starts
+only on Windows (or wherever `OE_BRIDGE_BIN` points at a binary that accepts `start`); on
+macOS/Linux start the bridge yourself. A debugger-based bridge holds your logged-in identity on
+every site at once — if you use one, consider
+**[kimi-webbridge-lockdown](https://github.com/drpwchen/kimi-webbridge-lockdown)** to fence your
+bank, brokerage and mailbox out of its reach.
+
+</details>
 
 ### Configuration (environment variables)
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | Browser-bridge daemon endpoint. |
-| `OE_BRIDGE_BIN` | `~/.kimi-webbridge/bin/kimi-webbridge.exe` on Windows; **unset elsewhere** | Daemon binary to auto-start if it isn't running. Unset ⇒ no auto-start; run the bridge yourself. |
-| `OE_BROWSER_EXE` | auto-detected per platform (Edge/Chrome/Chromium) | Browser to auto-launch when the bridge extension isn't connected (i.e. the browser is closed). |
+| `OE_TRANSPORT` | `cdp` (or `http` when `OE_BRIDGE_URL` is set) | `cdp` = dedicated browser over DevTools; `http` = legacy Kimi WebBridge daemon. |
+| `OE_BROWSER_EXE` | auto-detected per platform (Edge/Chrome/Chromium) | Browser to launch when none is running. |
+| `OE_CDP_PORT` | `9222` | DevTools port of the dedicated browser. Change it if something else already uses 9222. If a browser already answers on this port, the server uses it instead of launching one. |
+| `OE_CDP_PROFILE` | `<OE_DATA_DIR>/browser-profile` | Profile directory of the dedicated browser — your OpenEvidence login lives here. |
+| `OE_BROWSER_ARGS` | *(empty)* | Extra flags for launching the dedicated browser, e.g. `--no-sandbox` inside a container. If the browser fails to start, its own output is in `<OE_DATA_DIR>/browser-launch.log` and quoted in the error. |
+| `OE_BRIDGE_URL` | `http://127.0.0.1:10086/command` | `http` transport only: browser-bridge daemon endpoint. |
+| `OE_BRIDGE_BIN` | `~/.kimi-webbridge/bin/kimi-webbridge.exe` on Windows; **unset elsewhere** | `http` transport only: daemon binary to auto-start. Unset ⇒ no auto-start. |
 | `OE_DATA_DIR` | `~/.openevidence` | Where the query log, rate log and submission-spacing state are written. |
 | `OE_SUBMIT_SPACING_SEC` | `700` (≈11.7 min) | Minimum wall-clock gap between two question submissions. Lower it only against measurements of your own account — see below. |
 
@@ -131,15 +147,29 @@ unverifiable) and an evidence-landscape summary.
 ```bash
 pip install -r requirements.txt
 
+# Log in to OpenEvidence once, in the dedicated browser this opens:
+python mcp/server.py --login
+
 # Register with an MCP client, e.g. Claude Code:
 claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
 
 # Put skills/oe-verify/ where your client discovers skills.
 ```
 
-Log into openevidence.com in your normal browser once. From then on the server is
-self-healing: it auto-starts the bridge daemon, auto-launches the browser if it is closed
-(the bridge extension must be installed in it), and opens/reuses an OpenEvidence tab as needed.
+The login is kept in the dedicated profile; repeat `--login` only if OpenEvidence logs you out.
+From then on the server is self-healing: it launches the browser if it is closed, reconnects if
+it was restarted, and opens/reuses an OpenEvidence tab as needed. A `Not authenticated` error
+means the session expired — run `--login` again.
+
+Check the transport on your machine without touching OpenEvidence (it starts a throwaway browser
+profile against a local stand-in server, then closes it):
+
+```bash
+python tests/smoke_cdp.py              # Linux without a display: xvfb-run -a python tests/smoke_cdp.py
+python -m unittest discover -s tests   # unit tests, no browser needed
+```
+
+Both run in CI on Windows, macOS and Linux.
 
 ---
 
@@ -213,12 +243,13 @@ verification report, most of the questions it asks are his questions.
 From **[openevidence-mcp](https://github.com/htlin222/openevidence-mcp)** (Apache-2.0) came the
 transport idea that got us unstuck: OpenEvidence has no public API and an httpOnly session cookie,
 so don't scrape it — run the call inside the clinician's own already-logged-in browser tab. Our
-implementation is our own (and drives a different daemon), but the direction was his.
+implementation is our own (and now drives a dedicated browser over the DevTools Protocol
+rather than an extension), but the direction was his.
 
 We wrote our own tool layer rather than forking, for a practical reason: our verifier needs
 `publication_types`, `impact_score`, `recency_score`, `is_guideline` and per-chunk `origin`
-returned through the MCP contract itself, and we drive a general-purpose browser daemon rather
-than a dedicated extension. We also added a completeness layer his skill doesn't have (what did
+returned through the MCP contract itself, and we drive the browser through a general-purpose
+channel rather than a dedicated extension. We also added a completeness layer his skill doesn't have (what did
 OE *omit*?), a CrossRef existence gate, and a marker↔citation index mapping our architecture
 needs and his does not. Those are additions to his foundation, not a replacement for it.
 

@@ -40,9 +40,10 @@ This skill independently verifies OE output before you absorb it.
 ## Transport
 
 OE calls run through the `openevidence` MCP server (see the server README in this repo),
-which executes them as page-context `fetch()` inside your logged-in openevidence.com tab
-via a local browser bridge. If OE tools fail: check the bridge daemon is up (default
-`http://127.0.0.1:10086`) and openevidence.com is logged in in your normal browser.
+which executes them as page-context `fetch()` inside a logged-in openevidence.com tab of a
+dedicated browser it drives over the DevTools Protocol. If OE tools fail with
+`Not authenticated`, run `python mcp/server.py --login` and log in again in the window it opens;
+for anything else, `python tests/smoke_cdp.py` checks the transport without touching OE.
 
 ## Input Modes
 

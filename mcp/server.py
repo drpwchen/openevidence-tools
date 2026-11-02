@@ -10,9 +10,11 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -25,24 +27,57 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 BASE_URL = "https://www.openevidence.com"
 
-# ------- Transport: browser bridge -------
+# ------- Transport: your own logged-in browser tab -------
 # OpenEvidence has no public API, and its session cookie is httpOnly (it cannot be
 # exported to a plain HTTP client). So this server runs each OE API call as a
-# page-context fetch() INSIDE your own logged-in openevidence.com browser tab,
-# driven through a local browser-bridge daemon (default: kimi-webbridge, listening
-# on 127.0.0.1). Every request therefore goes through YOUR OWN account and session —
-# exactly what would happen if you clicked in the tab yourself. Set OE_BRIDGE_URL to
-# point at a different daemon endpoint.
+# page-context fetch() INSIDE a logged-in openevidence.com browser tab. Every request
+# therefore goes through YOUR OWN account and session — exactly what would happen if
+# you clicked in the tab yourself.
+#
+# Two transports reach that tab. Both speak the same small command set
+# (list_tabs / find_tab / navigate / evaluate, returning Kimi-WebBridge-shaped `data`):
+#   - "cdp" (default): a DEDICATED Chromium-family browser (Edge / Chrome / Chromium,
+#     auto-detected on Windows, macOS and Linux) running on its own profile
+#     (OE_CDP_PROFILE, default <OE_DATA_DIR>/browser-profile) and driven over the
+#     Chrome DevTools Protocol on 127.0.0.1:OE_CDP_PORT (default 9222) through
+#     Playwright. It is started on demand and left running. Log in to OpenEvidence
+#     ONCE in that browser:   python server.py --login
+#   - "http": the legacy Kimi WebBridge daemon (browser extension + local daemon on
+#     127.0.0.1:10086). Used when OE_TRANSPORT=http, or when OE_BRIDGE_URL is set.
+# OE_TRANSPORT=cdp|http forces one.
 #
 # Two hard constraints learned by measurement, both encoded below:
-#   1. NEVER await a slow promise inside evaluate — the daemon serializes
+#   1. NEVER await a slow promise inside evaluate — the bridge serializes
 #      commands, so an in-flight `await fetch(...)` blocks EVERY other bridge
 #      consumer until it settles. Hence fire-and-forget: evaluate returns
 #      immediately, the fetch lands in a window-scoped job slot, and we poll for it.
 #   2. Responses are big (a 29-citation article is ~80 KB) and evaluate returns
 #      them as a JSON string, so the body is pulled back in CHUNK-sized slices.
+
+
+def _pick_transport() -> str:
+    forced = os.environ.get("OE_TRANSPORT", "").strip().lower()
+    if forced in ("cdp", "http"):
+        return forced
+    if forced:
+        print(f"[openevidence] ignoring unknown OE_TRANSPORT={forced!r} (use cdp or http)", file=sys.stderr)
+    return "http" if os.environ.get("OE_BRIDGE_URL") else "cdp"
+
+
+TRANSPORT = _pick_transport()
 KIMI_URL = os.environ.get("OE_BRIDGE_URL", "http://127.0.0.1:10086/command")
 KIMI_SESSION = "openevidence-mcp"
+
+CDP_PORT = int(os.environ.get("OE_CDP_PORT", "9222"))
+CDP_ENDPOINT = f"http://127.0.0.1:{CDP_PORT}"
+CDP_PROFILE = Path(
+    os.environ.get("OE_CDP_PROFILE")
+    or Path(os.environ.get("OE_DATA_DIR", str(Path.home() / ".openevidence"))) / "browser-profile"
+).expanduser()
+# Extra browser flags for the cdp launch, e.g. "--no-sandbox" inside a container.
+CDP_EXTRA_ARGS = shlex.split(os.environ.get("OE_BROWSER_ARGS", ""), posix=os.name != "nt")
+CDP_LAUNCH_LOG = Path(os.environ.get("OE_DATA_DIR", str(Path.home() / ".openevidence"))) / "browser-launch.log"
+
 # Auto-starting the daemon needs a binary to exec. Windows ships one at a known
 # path; on macOS/Linux the bridge is provided by the Kimi desktop app itself and has
 # no documented standalone path, so we do NOT guess one — KIMI_BIN stays None and the
@@ -57,10 +92,11 @@ KIMI_BIN = Path(_BRIDGE_BIN) if _BRIDGE_BIN else None
 CHUNK = 40_000          # verified intact end-to-end; keeps each evaluate response small
 POLL_INTERVAL_SEC = 2.0
 
-# Browser auto-launch: the bridge daemon is only a relay — the extension living
-# inside the browser does the actual work, so a closed browser means every
-# command fails even though the daemon answers. Set OE_BROWSER_EXE to the browser
-# that has the bridge extension installed; otherwise common paths are tried.
+# Which browser to launch when none is up. cdp: the dedicated browser itself
+# (started on its own profile). http: the bridge daemon is only a relay — the
+# extension living inside the browser does the actual work, so a closed browser means
+# every command fails even though the daemon answers. Set OE_BROWSER_EXE to override;
+# otherwise common Edge / Chrome / Chromium paths are tried.
 if sys.platform == "darwin":
     _BROWSER_CANDIDATES = [
         "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
@@ -118,6 +154,152 @@ def _kimi_cmd(action: str, args: dict, timeout: int = 30) -> dict:
     if not data.get("ok"):
         raise RuntimeError(f"browser-bridge: {data.get('error', 'unknown error')}")
     return data.get("data", {})
+
+
+# ------- "cdp" transport: a dedicated browser over the DevTools Protocol -------
+# Playwright's sync API is bound to the thread that started it, while the MCP tools
+# call in via asyncio.to_thread from arbitrary pool threads. So every CDP call is
+# funnelled through ONE dedicated worker thread, and only that thread touches _CDP.
+_CDP_POOL = None
+_CDP_POOL_LOCK = threading.Lock()
+_CDP: dict = {"pw": None, "browser": None, "page": None}
+
+
+def _cdp_version() -> dict | None:
+    """The browser's /json/version, or None when nothing serves CDP on the port."""
+    try:
+        with urllib.request.urlopen(CDP_ENDPOINT + "/json/version", timeout=2) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _cdp_launch(url: str = "about:blank", wait_sec: int = 30) -> bool:
+    """Start the dedicated browser unless something already serves CDP on the port.
+
+    Returns True if this call launched it. The browser gets its own profile
+    (CDP_PROFILE): recent Chrome refuses remote debugging on the default profile,
+    and a separate profile keeps your everyday browsing out of reach of the port.
+    """
+    if _cdp_version():
+        return False
+    if not BROWSER_EXE or not Path(BROWSER_EXE).exists():
+        raise RuntimeError(
+            "no Chromium-family browser found to launch (Edge / Chrome / Chromium) — "
+            "install one or set OE_BROWSER_EXE"
+        )
+    CDP_PROFILE.mkdir(parents=True, exist_ok=True)
+    CDP_LAUNCH_LOG.parent.mkdir(parents=True, exist_ok=True)
+    argv = [
+        str(BROWSER_EXE),
+        f"--user-data-dir={CDP_PROFILE}",
+        f"--remote-debugging-port={CDP_PORT}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        *CDP_EXTRA_ARGS,
+        url,
+    ]
+    # The browser's own output goes to a log, not /dev/null: when it dies at start-up
+    # (sandbox, missing display, bad flag) that log is the only explanation there is.
+    with open(CDP_LAUNCH_LOG, "wb") as log:
+        proc = subprocess.Popen(
+            argv, stdout=log, stderr=subprocess.STDOUT, close_fds=True, **_DETACH_KWARGS
+        )
+    deadline = time.monotonic() + wait_sec
+    while time.monotonic() < deadline:
+        if _cdp_version():
+            return True
+        if proc.poll() not in (None, 0):  # 0 = handed off to an already-running instance
+            break
+        time.sleep(0.5)
+    try:
+        tail = CDP_LAUNCH_LOG.read_text(encoding="utf-8", errors="replace").strip()[-1500:]
+    except OSError:
+        tail = ""
+    state = "is still running" if proc.poll() is None else f"exited with code {proc.returncode}"
+    raise RuntimeError(
+        f"started {BROWSER_EXE} but nothing answered on {CDP_ENDPOINT} within {wait_sec}s "
+        f"(browser {state}). Another process may hold the port (set OE_CDP_PORT); "
+        "inside a container or CI the browser may need OE_BROWSER_ARGS=--no-sandbox. "
+        f"Browser output ({CDP_LAUNCH_LOG}):\n{tail or '(empty)'}"
+    )
+
+
+def _cdp_context():
+    """(Re)connect to the dedicated browser on the worker thread; return its default context."""
+    b = _CDP["browser"]
+    if b is None or not b.is_connected():
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as e:
+            raise RuntimeError(
+                "the cdp transport needs Playwright: `pip install -r requirements.txt` "
+                "(no `playwright install` is needed — it attaches to your own browser)"
+            ) from e
+        _cdp_launch()
+        os.environ.setdefault("NODE_NO_WARNINGS", "1")  # silence the driver's url.parse() warning
+        if _CDP["pw"] is None:
+            _CDP["pw"] = sync_playwright().start()
+        b = _CDP["pw"].chromium.connect_over_cdp(CDP_ENDPOINT)
+        _CDP["browser"], _CDP["page"] = b, None
+    # The default context IS the profile's own session (its cookies, its login);
+    # a fresh context would be an anonymous one.
+    return b.contexts[0] if b.contexts else b.new_context()
+
+
+def _cdp_run(action: str, args: dict) -> dict:
+    ctx = _cdp_context()
+    page = _CDP["page"]
+    if page is not None and page.is_closed():
+        page = _CDP["page"] = None
+    if action == "list_tabs":
+        return {"success": True, "tabs": [{"url": p.url} for p in ctx.pages]}
+    if action == "find_tab":
+        want = args.get("url", "")
+        if page is not None and page.url.startswith(want):
+            return {"success": True, "url": page.url}
+        for p in ctx.pages:
+            if p.url.startswith(want):
+                _CDP["page"] = p
+                return {"success": True, "url": p.url}
+        return {"success": False}
+    if action == "navigate":
+        if args.get("newTab") or page is None:
+            page = ctx.new_page()
+        resp = page.goto(args["url"], wait_until="domcontentloaded", timeout=45_000)
+        _CDP["page"] = page
+        return {"success": True, "url": page.url, "status": resp.status if resp else None}
+    if action == "evaluate":
+        if page is None:
+            raise RuntimeError("the OpenEvidence tab was closed — retry")
+        return {"value": page.evaluate(args["code"])}
+    raise RuntimeError(f"cdp transport: unsupported action {action!r}")
+
+
+def _cdp_cmd(action: str, args: dict, timeout: int = 30) -> dict:
+    """One command on the dedicated CDP thread. Returns the `data` payload."""
+    global _CDP_POOL
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    with _CDP_POOL_LOCK:
+        if _CDP_POOL is None:
+            _CDP_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oe-cdp")
+    fut = _CDP_POOL.submit(_cdp_run, action, args)
+    try:
+        return fut.result(timeout=timeout)
+    except FuturesTimeout:  # distinct from the builtin TimeoutError before Python 3.11
+        raise RuntimeError(f"cdp: {action} did not return within {timeout}s")
+    except RuntimeError:
+        raise
+    except Exception as e:  # Playwright errors: normalise to what the callers catch
+        raise RuntimeError(f"cdp: {action}: {e}") from e
+
+
+def _bridge_cmd(action: str, args: dict, timeout: int = 30) -> dict:
+    """Route one bridge command to the selected transport."""
+    if TRANSPORT == "cdp":
+        return _cdp_cmd(action, args, timeout=timeout)
+    return _kimi_cmd(action, args, timeout=timeout)
 
 
 def _kimi_daemon_up() -> bool:
@@ -216,15 +398,20 @@ def _ensure_oe_tab() -> None:
     The tab must be on the OE origin: page-context fetch() is what supplies the
     logged-in session, so a wrong-origin tab silently yields an anonymous request.
     """
-    _ensure_kimi_daemon()
-    _ensure_browser()
+    if TRANSPORT == "http":
+        _ensure_kimi_daemon()
+        _ensure_browser()
+    else:
+        # The dedicated browser is started on first use (up to ~20s cold). Pay that here,
+        # under a generous timeout, so the short find_tab budget below is not spent on it.
+        _bridge_cmd("list_tabs", {}, timeout=60)
     try:
-        r = _kimi_cmd("find_tab", {"url": BASE_URL}, timeout=15)
+        r = _bridge_cmd("find_tab", {"url": BASE_URL}, timeout=15)
         if r.get("success"):
             return
     except Exception:
         pass  # not open in this session yet
-    _kimi_cmd(
+    _bridge_cmd(
         "navigate",
         {"url": f"{BASE_URL}/", "newTab": True, "group_title": "OpenEvidence MCP"},
         timeout=45,
@@ -255,7 +442,7 @@ def _relay_request(method: str, path: str, body: dict | None = None, timeout_ms:
         .catch(e => {{ window.{job} = {{done: true, status: 0, body: '', error: String(e)}}; }});
       return 'started';
     }})()"""
-    _kimi_cmd("evaluate", {"code": fire}, timeout=30)
+    _bridge_cmd("evaluate", {"code": fire}, timeout=30)
 
     poll = (
         f"(() => {{ const j = window.{job}; "
@@ -267,7 +454,7 @@ def _relay_request(method: str, path: str, body: dict | None = None, timeout_ms:
     state: dict = {}
     while time.monotonic() < deadline:
         time.sleep(POLL_INTERVAL_SEC)
-        state = json.loads(_kimi_cmd("evaluate", {"code": poll}, timeout=30)["value"])
+        state = json.loads(_bridge_cmd("evaluate", {"code": poll}, timeout=30)["value"])
         if state.get("gone"):
             # window slot vanished → the OE tab navigated/reloaded mid-flight.
             raise RuntimeError("OE tab reloaded while the request was in flight — retry")
@@ -283,8 +470,8 @@ def _relay_request(method: str, path: str, body: dict | None = None, timeout_ms:
     parts: list[str] = []
     for off in range(0, state["len"], CHUNK):
         code = f"window.{job}.body.slice({off}, {off + CHUNK})"
-        parts.append(_kimi_cmd("evaluate", {"code": code}, timeout=30)["value"])
-    _kimi_cmd("evaluate", {"code": f"delete window.{job}; 'ok'"}, timeout=15)
+        parts.append(_bridge_cmd("evaluate", {"code": code}, timeout=30)["value"])
+    _bridge_cmd("evaluate", {"code": f"delete window.{job}; 'ok'"}, timeout=15)
 
     return state["status"], "".join(parts)
 
@@ -411,8 +598,9 @@ def _parse_submit_response(status: int, body: str) -> dict:
         if "log in" in low or "sign in" in low or status in (401, 403):
             return {
                 "__autherr__": (
-                    f"Not authenticated (HTTP {status}). Log into openevidence.com in your "
-                    "normal browser — requests run inside that tab's session via the browser bridge."
+                    f"Not authenticated (HTTP {status}). Log into openevidence.com in the browser "
+                    "the server drives — with the default cdp transport, run "
+                    "`python server.py --login` once."
                 )
             }
         return {"__autherr__": f"Unexpected non-JSON submit response (status {status}): {body[:200]}"}
@@ -808,7 +996,7 @@ def _ask_openevidence(question: str) -> dict:
     try:
         resp_body = _submit_article(payload)
     except RuntimeError as e:
-        return {"error": f"OE request failed: {e}. Check the browser bridge is running and openevidence.com is logged in."}
+        return {"error": f"OE request failed: {e}. Check the browser is reachable and openevidence.com is logged in (`python server.py --login`)."}
     if resp_body.get("__autherr__"):
         return {"error": resp_body["__autherr__"]}
 
@@ -850,7 +1038,7 @@ async def ask_openevidence(question: str, preserve_citations: bool = False) -> s
         )
     except asyncio.TimeoutError:
         _rate_release()
-        return "Error: ask_openevidence wall-clock timeout (300s). Check the browser bridge is up."
+        return "Error: ask_openevidence wall-clock timeout (300s). Check the browser is reachable."
     _rate_release()
 
     if "error" in data:
@@ -1005,5 +1193,21 @@ async def fetch_oe_result(article_id: str, preserve_citations: bool = False) -> 
     return _format_result(data, preserve_citations=preserve_citations)
 
 
+def _login() -> int:
+    """`python server.py --login`: open OpenEvidence in the dedicated browser to log in once."""
+    if TRANSPORT != "cdp":
+        print("--login is for the cdp transport; with OE_TRANSPORT=http, log in inside the "
+              "browser that has the bridge extension.")
+        return 2
+    if not _cdp_launch(f"{BASE_URL}/"):
+        _cdp_cmd("navigate", {"url": f"{BASE_URL}/", "newTab": True}, timeout=60)
+    print("Log in to OpenEvidence in the browser window that just opened.\n"
+          f"  profile: {CDP_PROFILE}\n  CDP:     {CDP_ENDPOINT}\n"
+          "The login is kept in that profile; repeat only if it expires.")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--login" in sys.argv[1:]:
+        sys.exit(_login())
     mcp.run(transport="stdio")
