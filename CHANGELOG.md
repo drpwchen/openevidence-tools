@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [0.4.1] — 2026-11-03
+
+**Make it clear that `/oe-verify` is optional, and how to install it.**
+
+### Added
+- **`--login` reminds you about the optional `/oe-verify` skill**, printing the copy source and
+  destination, until it is present in `~/.claude/skills/oe-verify`.
+- **README: "Optional: the `/oe-verify` skill"** — copy commands for macOS / Linux and Windows
+  (PowerShell), personal vs per-project install, and a note that the copy does not update itself
+  after `git pull`.
+
+### Changed
+- Both READMEs now mark the skill as optional (the MCP server works without it) and link the
+  install steps from the overview and the skill section.
+
 ## [0.4.0] — 2026-11-02
 
 **A built-in, cross-platform browser transport. No extension or third-party daemon needed.**

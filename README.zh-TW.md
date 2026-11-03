@@ -6,7 +6,9 @@
 
 1. **一個 MCP server**，把 OpenEvidence 以四個 tool 的形式接給任何 MCP client（Claude Code 等）：
    `ask_openevidence`、`list_recent_oe_queries`、`fetch_oe_result`、`ask_oe_followup`。
-2. **`/oe-verify` skill**，逐一把 OE 回答裡的**每一條 citation** 對回原始文獻查核，並找出 OE 漏掉的證據。
+2. **`/oe-verify` skill**（*選配，建議裝*），逐一把 OE 回答裡的**每一條 citation** 對回原始文獻查核，並找出 OE 漏掉的證據。
+   沒有它 MCP server 照樣能用；安裝只是把一個資料夾複製進你的 skill 目錄，見
+   [選配：`/oe-verify` skill](#選配oe-verify-skill)。
 
 **為什麼兩個都需要？** OpenEvidence 回答臨床問題很快，但它本質上是 RAG pipeline（向量檢索 + LLM
 合成），即使論述本身正確，citation 仍可能標錯。最典型的失效模式是 **transitive citation（轉引）**：
@@ -53,6 +55,8 @@ OE 檢索到某篇 **review 全文**的一個片段，而那段話其實是該 r
 ---
 
 ## `/oe-verify` skill
+
+*選配——MCP server 不需要它也能運作。安裝方式見 [選配：`/oe-verify` skill](#選配oe-verify-skill)。*
 
 對單一則 OE 回答做三層查核（`skills/oe-verify/SKILL.md`）：
 
@@ -135,7 +139,7 @@ python mcp/server.py --login
 # 註冊到 MCP client，例如 Claude Code：
 claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
 
-# 把 skills/oe-verify/ 放到你的 client 會掃描 skill 的位置。
+# 選配（建議）：安裝 /oe-verify skill（見下一節）。
 ```
 
 登入狀態存在專用 profile 裡；只有 OpenEvidence 把你登出時才需要再跑一次 `--login`。之後 server 會
@@ -151,6 +155,29 @@ python -m unittest discover -s tests   # 單元測試，不需要瀏覽器
 ```
 
 這兩項都在 CI 的 Windows、macOS、Linux 上跑。
+
+### 選配：`/oe-verify` skill
+
+透過 MCP server *使用* OpenEvidence 不需要這個 skill，但要放心依賴一則答案就需要它（理由見
+[上方](#oe-verify-skill)）。它就是一個資料夾 `skills/oe-verify/`；安裝＝把這個資料夾複製到你的
+client 載入 skill 的位置。在你裝好之前，`--login` 每次都會提醒一次。
+
+Claude Code，裝成個人 skill（所有專案都能用）：
+
+```bash
+# macOS / Linux
+mkdir -p ~/.claude/skills && cp -r skills/oe-verify ~/.claude/skills/
+```
+
+```powershell
+# Windows（PowerShell）
+New-Item -ItemType Directory -Force "$HOME\.claude\skills" | Out-Null
+Copy-Item -Recurse skills\oe-verify "$HOME\.claude\skills\"
+```
+
+只想在單一專案用，就改複製到 `<你的專案>/.claude/skills/`。裝完開一個新的 Claude Code session，
+之後在 `ask_openevidence` 回答後跑 `/oe-verify`。複製過去的版本不會自己更新：`git pull` 之後要再複製一次
+（或改用 symlink 而不是複製）。其他 MCP client：把資料夾放到該 client 掃描 skill 的位置。
 
 ---
 

@@ -7,8 +7,10 @@ evidence source you can actually trust:
 
 1. **An MCP server** that exposes OpenEvidence to any MCP client (Claude Code, etc.) as four
    tools — `ask_openevidence`, `list_recent_oe_queries`, `fetch_oe_result`, `ask_oe_followup`.
-2. **The `/oe-verify` skill**, which cross-checks *every* citation in an OE answer against
-   primary sources and flags what OE left out.
+2. **The `/oe-verify` skill** *(optional, recommended)*, which cross-checks *every* citation in
+   an OE answer against primary sources and flags what OE left out. The MCP server works without
+   it; installing it is one copy into your skills folder — see
+   [Optional: the `/oe-verify` skill](#optional-the-oe-verify-skill).
 
 **Why both?** OpenEvidence answers clinical questions fast, but it is a RAG pipeline (vector
 search + LLM synthesis), and its citations can be wrong even when the underlying claim is real.
@@ -59,6 +61,9 @@ the number is really *that paper's own* finding.
 ---
 
 ## The `/oe-verify` skill
+
+*Optional — the MCP server runs without it. To install, see
+[Optional: the `/oe-verify` skill](#optional-the-oe-verify-skill).*
 
 A three-layer verification pass over one OE answer (`skills/oe-verify/SKILL.md`):
 
@@ -153,7 +158,7 @@ python mcp/server.py --login
 # Register with an MCP client, e.g. Claude Code:
 claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
 
-# Put skills/oe-verify/ where your client discovers skills.
+# Optional, recommended: install the /oe-verify skill (next section).
 ```
 
 The login is kept in the dedicated profile; repeat `--login` only if OpenEvidence logs you out.
@@ -170,6 +175,31 @@ python -m unittest discover -s tests   # unit tests, no browser needed
 ```
 
 Both run in CI on Windows, macOS and Linux.
+
+### Optional: the `/oe-verify` skill
+
+The skill is not needed to *use* OpenEvidence through the MCP server, but it is what makes an
+answer safe to rely on (see [why](#the-oe-verify-skill)). It is a single folder,
+`skills/oe-verify/`; installing it means copying that folder to where your client loads skills.
+`--login` reminds you of this until it is installed.
+
+For Claude Code, as a personal skill available in every project:
+
+```bash
+# macOS / Linux
+mkdir -p ~/.claude/skills && cp -r skills/oe-verify ~/.claude/skills/
+```
+
+```powershell
+# Windows (PowerShell)
+New-Item -ItemType Directory -Force "$HOME\.claude\skills" | Out-Null
+Copy-Item -Recurse skills\oe-verify "$HOME\.claude\skills\"
+```
+
+To make it available in one project only, copy it to `<your project>/.claude/skills/` instead.
+Start a new Claude Code session afterwards; then run `/oe-verify` after an `ask_openevidence`
+answer. The copy does not update itself: after `git pull`, copy the folder again (or symlink it
+instead of copying). Other MCP clients: put the folder wherever that client discovers skills.
 
 ---
 

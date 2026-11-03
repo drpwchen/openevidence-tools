@@ -1204,6 +1204,17 @@ def _login() -> int:
     print("Log in to OpenEvidence in the browser window that just opened.\n"
           f"  profile: {CDP_PROFILE}\n  CDP:     {CDP_ENDPOINT}\n"
           "The login is kept in that profile; repeat only if it expires.")
+    # Install-time nudge for the optional /oe-verify skill. Only in the public repo
+    # layout (mcp/server.py next to skills/), and only while Claude Code doesn't
+    # already have it as a personal skill.
+    skill_src = Path(__file__).resolve().parent.parent / "skills" / "oe-verify"
+    if skill_src.is_dir() and not (Path.home() / ".claude" / "skills" / "oe-verify").exists():
+        print("\nOptional, recommended: install the /oe-verify skill, which checks every "
+              "citation in an OE answer before you rely on it.\n"
+              f"  Claude Code: copy {skill_src}\n"
+              f"           to  {Path.home() / '.claude' / 'skills' / 'oe-verify'}\n"
+              "  (or to <your project>/.claude/skills/ for one project only). "
+              "See README: \"Optional: the /oe-verify skill\".")
     return 0
 
 
