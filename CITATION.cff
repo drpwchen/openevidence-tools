@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "openevidence-tools"
+type: software
+version: 0.4.2
+date-released: 2026-11-14
+license: MIT
+url: "https://github.com/drpwchen/openevidence-tools"
+repository-code: "https://github.com/drpwchen/openevidence-tools"
+abstract: "MCP server for OpenEvidence plus an /oe-verify skill that cross-checks every citation in an answer against primary sources."
+authors:
+  - family-names: Chen
+    given-names: Po-Wei

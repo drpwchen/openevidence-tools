@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [0.4.2] — 2026-11-14 — Docs: README quality pass
+
+### Docs
+- README: new Quickstart near the top (with what to expect and a demo command), a support line,
+  a Limitations section and a Support footer. The security callout for the legacy transport is
+  unchanged.
+- README.zh-TW: same changes.
+- Added `SECURITY.md` (private vulnerability reporting) and `CITATION.cff`.
+- No code changes.
+
 ## [0.4.1] — 2026-11-03
 
 **Make it clear that `/oe-verify` is optional, and how to install it.**

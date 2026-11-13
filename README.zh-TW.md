@@ -16,6 +16,23 @@ OE 檢索到某篇 **review 全文**的一個片段，而那段話其實是該 r
 這個數字算在 review 頭上。論述是真的，出處是錯的。**OE 的回答未經查核前，絕不可直接吸收** —— 這正是
 `/oe-verify` 存在的理由。
 
+## 快速開始
+
+需要 OpenEvidence 帳號、Python 3.10+，以及 Edge、Chrome 或 Chromium（細節見[需求](#需求)）。
+工具本身免費（MIT）、不需 API key；OpenEvidence 自己的條款與額度照舊。
+
+```bash
+pip install -r requirements.txt
+python mcp/server.py --login          # 在它打開的瀏覽器視窗裡登入 OpenEvidence 一次
+claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
+```
+
+接著對 Claude Code 問一個臨床問題，它會呼叫 `ask_openevidence`，回傳含 citation 的答案。
+想先確認 transport 能動、又不碰 OpenEvidence，可以對本機的假伺服器跑 smoke test：
+`python tests/smoke_cdp.py`。
+
+> 🧋 省了你時間的話，[請我喝杯飲料](https://drpwchen.com/support/)。
+
 ---
 
 ## MCP server 提供的 tools
@@ -251,6 +268,13 @@ marker↔citation index 對應。這些是加在他的地基上，不是取代�
 `skills/oe-verify/` 衍生自 `audit-oe-skill`，MIT © 2026 Hsieh-Ting Lin，詳見 [NOTICE](NOTICE)。
 謝謝你，Hsieh-Ting。
 
+## 限制
+
+- OpenEvidence 沒有公開 API。這個 server 用的是網站自己的私有端點，網站一改版就可能壞（見上）。
+- 送出問題有配速（預設約 11.7 分鐘一題），這是為了守住 OpenEvidence 的最小間隔，本工具無法加快。
+- 需要在專用瀏覽器裡保有已登入的 OpenEvidence session；過期就要重跑 `--login`。
+- `/oe-verify` 能降低 citation 錯誤，但不能取代自己讀原始文獻，輸出也不是醫療建議。
+
 ## 與 textbook-to-note 搭配
 
 `/oe-verify` 的設計目標之一，是作為
@@ -258,3 +282,10 @@ marker↔citation index 對應。這些是加在他的地基上，不是取代�
 **evidence-enrichment 階段**：當一則筆記的 management/treatment 段落需要最新的建議時，由
 `ask_openevidence` 取得，再由 `/oe-verify` 把關後才寫進筆記。當然，單獨使用 —— 純粹問 OE 問題並查核
 答案 —— 也完全沒問題。
+
+---
+
+## Support 支持
+
+覺得這個工具有幫助嗎？歡迎[請我喝飲料](https://drpwchen.com/support/) 🧋
+If this tool helped you, you can [buy me a drink](https://drpwchen.com/en/support/).

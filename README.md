@@ -19,6 +19,24 @@ in which the review quotes *another* trial's number, then credits that number to
 itself. The claim is true; the attribution is false. **Never absorb an OE answer unverified** —
 that is the whole reason `/oe-verify` exists.
 
+## Quickstart
+
+You need an OpenEvidence account, Python 3.10+ and Edge, Chrome or Chromium (details in
+[Requirements](#requirements)). The tools are free (MIT) and need no API key; OpenEvidence's own
+terms and quota apply.
+
+```bash
+pip install -r requirements.txt
+python mcp/server.py --login          # log in to OpenEvidence once, in the browser window it opens
+claude mcp add openevidence -- python /path/to/openevidence-tools/mcp/server.py
+```
+
+Then ask Claude Code a clinical question; it calls `ask_openevidence` and returns the answer with
+citations. To see the transport work without touching OpenEvidence, run the smoke test against a local
+stand-in server: `python tests/smoke_cdp.py`.
+
+> 🧋 Saved you some time? [Buy me a drink](https://drpwchen.com/en/support/).
+
 ---
 
 ## What the MCP server exposes
@@ -286,6 +304,17 @@ needs and his does not. Those are additions to his foundation, not a replacement
 `skills/oe-verify/` is derived from `audit-oe-skill`, MIT © 2026 Hsieh-Ting Lin; see
 [NOTICE](NOTICE). Thank you, Hsieh-Ting.
 
+## Limitations
+
+- There is no public OpenEvidence API. The server uses the same private endpoints as the website,
+  so a site change can break it (see above).
+- Question submissions are paced (default one per ~11.7 minutes) to stay under OpenEvidence's
+  minimum gap; this tool cannot make it faster.
+- It needs a logged-in OpenEvidence session in the dedicated browser; an expired session needs
+  `--login` again.
+- `/oe-verify` reduces citation errors but does not replace reading the primary sources, and it is
+  not medical advice.
+
 ## Works with textbook-to-note
 
 `/oe-verify` is designed to plug into the
@@ -293,6 +322,13 @@ needs and his does not. Those are additions to his foundation, not a replacement
 optional **evidence-enrichment stage**: when a note's management/treatment section needs current
 guidance, `ask_openevidence` fetches it and `/oe-verify` gates it before it enters the note.
 Standalone use — just asking OE questions and verifying the answers — is equally fine.
+
+---
+
+## Support 支持
+
+If this tool helped you, you can [buy me a drink](https://drpwchen.com/en/support/) 🧋
+覺得這個工具有幫助嗎？歡迎[請我喝飲料](https://drpwchen.com/support/)。
 
 ---
 
